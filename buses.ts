@@ -55,10 +55,26 @@ async function pollBuses() {
   }
 }
 
-/** Start polling for bus positions at a fixed interval. */
+let polling = false;
+
+/** Start the async poll loop. No-op if already running. */
 export function startPolling(): void {
-  setInterval(pollBuses, POLL_INTERVAL_MS);
-  pollBuses();
+  if (polling) return;
+  polling = true;
+  (async () => {
+    while (polling) {
+      await pollBuses();
+      if (!polling) break;
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+  })();
+}
+
+/** Stop the poll loop and clear stale data. */
+export function stopPolling(): void {
+  polling = false;
+  latestSnapshot = [];
+  lastKnownPositions.clear();
 }
 
 /** Return the latest full snapshot of all buses. */

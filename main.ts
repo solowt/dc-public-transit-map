@@ -4,11 +4,13 @@ import {
   getLatestSnapshot as getTrainSnapshot,
   init as initTrains,
   startPolling as startTrainPolling,
+  stopPolling as stopTrainPolling,
 } from "./trains.ts";
 import {
   getLatestSnapshot as getBusSnapshot,
   init as initBuses,
   startPolling as startBusPolling,
+  stopPolling as stopBusPolling,
 } from "./buses.ts";
 
 const circuitMap = await loadCircuitMap();
@@ -17,22 +19,22 @@ const circuitMap = await loadCircuitMap();
 const trainClients = new Set<WebSocket>();
 const busClients = new Set<WebSocket>();
 
-// Initialize modules and start polling
+// Initialize modules (polling starts on first client connect)
 await initTrains(circuitMap, trainClients);
-startTrainPolling();
-
 initBuses(busClients);
-startBusPolling();
 
 function handleWebSocket(
   req: Request,
   clients: Set<WebSocket>,
   getSnapshot: () => unknown[],
+  onStartPolling: () => void,
+  onStopPolling: () => void,
 ): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
 
   socket.onopen = () => {
     clients.add(socket);
+    if (clients.size === 1) onStartPolling();
     const snapshot = getSnapshot();
     if (snapshot.length > 0) {
       socket.send(JSON.stringify(snapshot));
@@ -41,6 +43,7 @@ function handleWebSocket(
 
   socket.onclose = () => {
     clients.delete(socket);
+    if (clients.size === 0) onStopPolling();
   };
 
   return response;
@@ -55,6 +58,14 @@ const CONTENT_TYPES: Record<string, string> = {
 };
 
 async function serveStatic(path: string): Promise<Response> {
+  try {
+    const stat = await Deno.stat(path);
+    if (stat.isDirectory) {
+      path = path.replace(/\/?$/, "/index.html");
+    }
+  } catch {
+    return new Response("Not Found", { status: 404 });
+  }
   const ext = path.substring(path.lastIndexOf("."));
   const contentType = CONTENT_TYPES[ext] || "application/octet-stream";
   try {
@@ -71,10 +82,10 @@ Deno.serve({ port: 8080 }, async (req) => {
   if (req.headers.get("upgrade") === "websocket") {
     const wsUrl = new URL(req.url);
     if (wsUrl.pathname === "/ws/trains") {
-      return handleWebSocket(req, trainClients, getTrainSnapshot);
+      return handleWebSocket(req, trainClients, getTrainSnapshot, startTrainPolling, stopTrainPolling);
     }
     if (wsUrl.pathname === "/ws/buses") {
-      return handleWebSocket(req, busClients, getBusSnapshot);
+      return handleWebSocket(req, busClients, getBusSnapshot, startBusPolling, stopBusPolling);
     }
     return new Response("Not Found", { status: 404 });
   }
@@ -119,8 +130,8 @@ Deno.serve({ port: 8080 }, async (req) => {
     return serveStatic(filePath);
   }
 
-  // Serve public/ directory (default to index.html)
-  if (pathname === "/") pathname = "/index.html";
+  // Serve public/ directory (default to index.html for directory paths)
+  if (pathname.endsWith("/")) pathname += "index.html";
   const filePath = "./public" + pathname;
   return serveStatic(filePath);
 });

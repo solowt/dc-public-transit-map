@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WMATA Transit Map</title>
+    <link
+      rel="stylesheet"
+      href="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.css"
+    />
+    <script src="https://unpkg.com/maplibre-gl@5/dist/maplibre-gl.js"></script>
+    <style>
+      html, body, #map {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #togglePanel {
+        font-size: large;
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: rgba(36, 36, 36, 0.92);
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 12px 16px;
+        color: #eee;
+        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+        z-index: 99;
+        min-width: 225px;
+      }
+      #togglePanel h3 {
+        margin: 0 0 8px 0;
+        font-size: larger;
+        font-weight: 600;
+        color: #aaa;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+      .toggle-row:last-child {
+        margin-bottom: 0;
+      }
+      .toggle-row label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+      }
+      .toggle-row input[type="checkbox"] {
+        accent-color: #4fc3f7;
+        width: 14px;
+        height: 14px;
+      }
+      .status {
+        margin-left: 8px;
+      }
+      .status.live {
+        color: #66bb6a;
+      }
+      .status.connecting {
+        color: #ffa726;
+      }
+      .status.off {
+        color: #888;
+      }
+      .status.disconnected {
+        color: #ef5350;
+      }
+      .count {
+        font-size: 12px;
+        color: #999;
+        margin-left: 4px;
+      }
+      .maplibregl-popup-content {
+        background: rgba(36, 36, 36, 0.95);
+        color: #eee;
+        border-radius: 6px;
+        padding: 12px 16px;
+        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+        font-size: 13px;
+        min-width: 200px;
+      }
+      .maplibregl-popup-content h3 {
+        margin: 0 0 8px 0;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .maplibregl-popup-tip {
+        border-top-color: rgba(36, 36, 36, 0.95);
+      }
+      .maplibregl-popup-close-button {
+        color: #aaa;
+        font-size: 18px;
+      }
+      .popup-table {
+        width: 100%;
+        border-collapse: collapse;
+      }
+      .popup-table td {
+        padding: 2px 0;
+      }
+      .popup-table td:first-child {
+        color: #999;
+        padding-right: 12px;
+        white-space: nowrap;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="map"></div>
+    <div id="togglePanel">
+      <h3>Layers</h3>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="trainToggle" checked /> Trains <span
+            id="trainCount"
+            class="count"
+          ></span></label>
+        <span id="trainStatus" class="status connecting">connecting...</span>
+      </div>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="busToggle" /> Buses <span
+            id="busCount"
+            class="count"
+          ></span></label>
+        <span id="busStatus" class="status off">off</span>
+      </div>
+    </div>
+    <script>
+      const LINE_COLORS = {
+        red: "#E51636",
+        blue: "#0795D3",
+        green: "#00B140",
+        orange: "#ED8B00",
+        silver: "#A2A4A1",
+        yellow: "#FFD100",
+        RD: "#E51636",
+        BL: "#0795D3",
+        GR: "#00B140",
+        OR: "#ED8B00",
+        SV: "#A2A4A1",
+        YL: "#FFD100",
+      };
+
+      // --- Create train marker image via canvas ---
+      function createTrainIcon(size) {
+        const canvas = document.createElement("canvas");
+        canvas.width = size;
+        canvas.height = size;
+        const ctx = canvas.getContext("2d");
+        const cx = size / 2;
+        const cy = size / 2;
+        const r = size * 0.35;
+
+        // Circle
+        ctx.beginPath();
+        ctx.arc(cx, cy + size * 0.08, r, 0, Math.PI * 2);
+        ctx.fillStyle = "white";
+        ctx.fill();
+
+        // Arrow pointing up
+        const arrowTop = cy - size * 0.38;
+        const arrowW = size * 0.25;
+        ctx.beginPath();
+        ctx.moveTo(cx, arrowTop);
+        ctx.lineTo(cx - arrowW, cy - size * 0.08);
+        ctx.lineTo(cx + arrowW, cy - size * 0.08);
+        ctx.closePath();
+        ctx.fill();
+
+        return ctx.getImageData(0, 0, size, size);
+      }
+
+      // --- Data stores ---
+      const trainFeatures = new Map();
+      const busFeatures = new Map();
+
+      function featureCollection(map) {
+        return { type: "FeatureCollection", features: Array.from(map.values()) };
+      }
+
+      const EMPTY_FC = { type: "FeatureCollection", features: [] };
+
+      // --- Map setup ---
+      const map = new maplibregl.Map({
+        container: "map",
+        style: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+        center: [-77.04, 38.9],
+        zoom: 12,
+      });
+
+      map.on("load", async () => {
+        // Register train marker as SDF image
+        const iconSize = 64;
+        const imageData = createTrainIcon(iconSize);
+        map.addImage("train-marker", imageData, { sdf: true });
+
+        // --- 1. Metro lines ---
+        try {
+          const linesRes = await fetch("/data/Metro_Lines_Regional.geojson");
+          const linesGeojson = await linesRes.json();
+
+          map.addSource("metro-lines", { type: "geojson", data: linesGeojson });
+          map.addLayer({
+            id: "metro-lines",
+            type: "line",
+            source: "metro-lines",
+            paint: {
+              "line-color": [
+                "match", ["get", "NAME"],
+                "red", LINE_COLORS.red,
+                "blue", LINE_COLORS.blue,
+                "green", LINE_COLORS.green,
+                "orange", LINE_COLORS.orange,
+                "silver", LINE_COLORS.silver,
+                "yellow", LINE_COLORS.yellow,
+                "#FFFFFF",
+              ],
+              "line-width": 3,
+            },
+          });
+        } catch (err) {
+          console.error("Failed to load metro lines:", err);
+        }
+
+        // --- 2. Stations ---
+        try {
+          const stationsRes = await fetch("/api/stations");
+          const stations = await stationsRes.json();
+
+          const stationsFC = {
+            type: "FeatureCollection",
+            features: stations.map((s) => ({
+              type: "Feature",
+              geometry: { type: "Point", coordinates: [s.Lon, s.Lat] },
+              properties: {
+                Name: s.Name,
+                Code: s.Code,
+                LineCode1: s.LineCode1 || "",
+                LineCode2: s.LineCode2 || "",
+                LineCode3: s.LineCode3 || "",
+                LineCode4: s.LineCode4 || "",
+                Address: s.Address
+                  ? `${s.Address.Street}, ${s.Address.City}, ${s.Address.State} ${s.Address.Zip}`
+                  : "",
+              },
+            })),
+          };
+
+          map.addSource("stations", { type: "geojson", data: stationsFC });
+
+          map.addLayer({
+            id: "stations",
+            type: "circle",
+            source: "stations",
+            paint: {
+              "circle-radius": 4,
+              "circle-color": "#FFFFFF",
+              "circle-stroke-color": "#000000",
+              "circle-stroke-width": 1,
+            },
+          });
+
+          map.addLayer({
+            id: "station-labels",
+            type: "symbol",
+            source: "stations",
+            minzoom: 13,
+            layout: {
+              "text-field": ["get", "Name"],
+              "text-size": 11,
+              "text-offset": [1, 0],
+              "text-anchor": "left",
+              "text-font": ["Open Sans Bold"],
+            },
+            paint: {
+              "text-color": "#FFFFFF",
+              "text-halo-color": "#000000",
+              "text-halo-width": 1,
+            },
+          });
+        } catch (err) {
+          console.error("Failed to load stations:", err);
+        }
+
+        // --- 3. Bus route (empty, populated on popup) ---
+        map.addSource("bus-route", { type: "geojson", data: EMPTY_FC });
+        map.addLayer({
+          id: "bus-route",
+          type: "line",
+          source: "bus-route",
+          paint: {
+            "line-color": "#4fc3f7",
+            "line-width": 3,
+          },
+        });
+
+        // --- 4. Buses ---
+        map.addSource("buses", { type: "geojson", data: EMPTY_FC });
+        map.addLayer({
+          id: "buses",
+          type: "circle",
+          source: "buses",
+          layout: { visibility: "none" },
+          paint: {
+            "circle-radius": 4,
+            "circle-color": "#4fc3f7",
+            "circle-stroke-color": "#FFFFFF",
+            "circle-stroke-width": 0.5,
+          },
+        });
+
+        // --- 5. Trains ---
+        map.addSource("trains", { type: "geojson", data: EMPTY_FC });
+        map.addLayer({
+          id: "trains",
+          type: "symbol",
+          source: "trains",
+          layout: {
+            "icon-image": "train-marker",
+            "icon-size": 0.3,
+            "icon-rotate": ["get", "Heading"],
+            "icon-rotation-alignment": "map",
+            "icon-allow-overlap": true,
+          },
+          paint: {
+            "icon-color": [
+              "match", ["get", "LineCode"],
+              "RD", LINE_COLORS.RD,
+              "BL", LINE_COLORS.BL,
+              "GR", LINE_COLORS.GR,
+              "OR", LINE_COLORS.OR,
+              "SV", LINE_COLORS.SV,
+              "YL", LINE_COLORS.YL,
+              "#000000",
+            ],
+            "icon-halo-color": "#FFFFFF",
+            "icon-halo-width": 1,
+          },
+        });
+
+        // --- Popups ---
+
+        // Train popup
+        map.on("click", "trains", (e) => {
+          const props = e.features[0].properties;
+          const html = `
+            <h3>Train ${props.TrainId}</h3>
+            <table class="popup-table">
+              <tr><td>Train ID</td><td>${props.TrainId}</td></tr>
+              <tr><td>Train Number</td><td>${props.TrainNumber}</td></tr>
+              <tr><td>Line</td><td>${props.LineCode}</td></tr>
+              <tr><td>Cars</td><td>${props.CarCount}</td></tr>
+              <tr><td>Direction</td><td>${props.DirectionNum}</td></tr>
+              <tr><td>Circuit ID</td><td>${props.CircuitId}</td></tr>
+              <tr><td>Destination</td><td>${props.DestinationStationCode}</td></tr>
+              <tr><td>Seconds at Location</td><td>${props.SecondsAtLocation}</td></tr>
+              <tr><td>Service Type</td><td>${props.ServiceType}</td></tr>
+              <tr><td>Heading</td><td>${Number(props.Heading).toFixed(1)}</td></tr>
+            </table>`;
+          new maplibregl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(html)
+            .addTo(map);
+        });
+
+        // Bus popup
+        map.on("click", "buses", (e) => {
+          const props = e.features[0].properties;
+          const html = `
+            <h3>Bus ${props.VehicleID}</h3>
+            <table class="popup-table">
+              <tr><td>Vehicle ID</td><td>${props.VehicleID}</td></tr>
+              <tr><td>Route</td><td>${props.RouteID}</td></tr>
+              <tr><td>Direction</td><td>${props.DirectionText}</td></tr>
+              <tr><td>Headsign</td><td>${props.TripHeadsign}</td></tr>
+              <tr><td>Deviation (min)</td><td>${props.Deviation}</td></tr>
+              <tr><td>Last Updated</td><td>${props.DateTime}</td></tr>
+            </table>`;
+          new maplibregl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(html)
+            .addTo(map);
+        });
+
+        // Station popup
+        map.on("click", "stations", (e) => {
+          const props = e.features[0].properties;
+          const lines = [props.LineCode1, props.LineCode2, props.LineCode3, props.LineCode4]
+            .filter(Boolean)
+            .join(", ");
+          const html = `
+            <h3>${props.Name}</h3>
+            <table class="popup-table">
+              <tr><td>Station Code</td><td>${props.Code}</td></tr>
+              <tr><td>Lines</td><td>${lines}</td></tr>
+              <tr><td>Address</td><td>${props.Address}</td></tr>
+            </table>`;
+          new maplibregl.Popup()
+            .setLngLat(e.lngLat)
+            .setHTML(html)
+            .addTo(map);
+        });
+
+        // Cursor style for interactive layers
+        for (const layer of ["trains", "buses", "stations"]) {
+          map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+          map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
+        }
+
+        // --- Start train connection ---
+        connectTrains();
+      });
+
+      // --- WebSocket helpers ---
+      const wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
+      let trainWs = null;
+      let busWs = null;
+
+      const trainStatusEl = document.getElementById("trainStatus");
+      const busStatusEl = document.getElementById("busStatus");
+      const trainToggleEl = document.getElementById("trainToggle");
+      const busToggleEl = document.getElementById("busToggle");
+      const trainCountEl = document.getElementById("trainCount");
+      const busCountEl = document.getElementById("busCount");
+
+      const setStatus = (el, state) => {
+        const labels = {
+          live: "live",
+          connecting: "connecting...",
+          off: "off",
+          disconnected: "disconnected",
+        };
+        el.textContent = labels[state] || state;
+        el.className = "status " + state;
+      };
+
+      // --- Train connection ---
+      const connectTrains = () => {
+        if (trainWs) return;
+        setStatus(trainStatusEl, "connecting");
+        trainWs = new WebSocket(`${wsProtocol}//${location.host}/ws/trains`);
+
+        trainWs.onopen = () => {
+          setStatus(trainStatusEl, "live");
+        };
+
+        trainWs.onmessage = (event) => {
+          const trains = JSON.parse(event.data);
+          for (const train of trains) {
+            trainFeatures.set(train.TrainId, {
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [train.location.longitude, train.location.latitude],
+              },
+              properties: {
+                TrainId: train.TrainId,
+                TrainNumber: train.TrainNumber,
+                CarCount: train.CarCount,
+                DirectionNum: train.DirectionNum,
+                CircuitId: train.CircuitId,
+                DestinationStationCode: train.DestinationStationCode || "",
+                LineCode: train.LineCode || "",
+                SecondsAtLocation: train.SecondsAtLocation,
+                ServiceType: train.ServiceType,
+                Heading: train.heading,
+              },
+            });
+          }
+          const src = map.getSource("trains");
+          if (src) src.setData(featureCollection(trainFeatures));
+          trainCountEl.textContent = trainFeatures.size > 0 ? `(${trainFeatures.size})` : "";
+        };
+
+        trainWs.onclose = () => {
+          trainWs = null;
+          if (trainToggleEl.checked) {
+            setStatus(trainStatusEl, "disconnected");
+          }
+        };
+
+        trainWs.onerror = () => {
+          console.error("Train WebSocket error");
+        };
+      };
+
+      const disconnectTrains = () => {
+        if (trainWs) {
+          trainWs.onclose = null;
+          trainWs.close();
+          trainWs = null;
+        }
+        trainFeatures.clear();
+        const src = map.getSource("trains");
+        if (src) src.setData(EMPTY_FC);
+        trainCountEl.textContent = "";
+        setStatus(trainStatusEl, "off");
+      };
+
+      // --- Bus connection ---
+      const connectBuses = () => {
+        if (busWs) return;
+        setStatus(busStatusEl, "connecting");
+        busWs = new WebSocket(`${wsProtocol}//${location.host}/ws/buses`);
+
+        busWs.onopen = () => {
+          setStatus(busStatusEl, "live");
+        };
+
+        busWs.onmessage = (event) => {
+          const buses = JSON.parse(event.data);
+          for (const bus of buses) {
+            busFeatures.set(bus.VehicleID, {
+              type: "Feature",
+              geometry: {
+                type: "Point",
+                coordinates: [bus.Lon, bus.Lat],
+              },
+              properties: {
+                VehicleID: bus.VehicleID,
+                RouteID: bus.RouteID,
+                DirectionText: bus.DirectionText || "",
+                TripHeadsign: bus.TripHeadsign || "",
+                Deviation: bus.Deviation,
+                DateTime: bus.DateTime || "",
+              },
+            });
+          }
+          const src = map.getSource("buses");
+          if (src) src.setData(featureCollection(busFeatures));
+          busCountEl.textContent = busFeatures.size > 0 ? `(${busFeatures.size})` : "";
+        };
+
+        busWs.onclose = () => {
+          busWs = null;
+          if (busToggleEl.checked) {
+            setStatus(busStatusEl, "disconnected");
+          }
+        };
+
+        busWs.onerror = () => {
+          console.error("Bus WebSocket error");
+        };
+      };
+
+      const disconnectBuses = () => {
+        if (busWs) {
+          busWs.onclose = null;
+          busWs.close();
+          busWs = null;
+        }
+        busFeatures.clear();
+        const src = map.getSource("buses");
+        if (src) src.setData(EMPTY_FC);
+        busCountEl.textContent = "";
+        setStatus(busStatusEl, "off");
+      };
+
+      // --- Toggle handlers ---
+      trainToggleEl.addEventListener("change", function () {
+        if (this.checked) {
+          if (map.getLayer("metro-lines")) map.setLayoutProperty("metro-lines", "visibility", "visible");
+          if (map.getLayer("stations")) map.setLayoutProperty("stations", "visibility", "visible");
+          if (map.getLayer("station-labels")) map.setLayoutProperty("station-labels", "visibility", "visible");
+          if (map.getLayer("trains")) map.setLayoutProperty("trains", "visibility", "visible");
+          connectTrains();
+        } else {
+          if (map.getLayer("metro-lines")) map.setLayoutProperty("metro-lines", "visibility", "none");
+          if (map.getLayer("stations")) map.setLayoutProperty("stations", "visibility", "none");
+          if (map.getLayer("station-labels")) map.setLayoutProperty("station-labels", "visibility", "none");
+          if (map.getLayer("trains")) map.setLayoutProperty("trains", "visibility", "none");
+          disconnectTrains();
+        }
+      });
+
+      busToggleEl.addEventListener("change", function () {
+        if (this.checked) {
+          if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", "visible");
+          connectBuses();
+        } else {
+          if (map.getLayer("buses")) map.setLayoutProperty("buses", "visibility", "none");
+          disconnectBuses();
+        }
+      });
+
+      // --- Bus route display on popup (commented out, same as Esri app) ---
+      // map.on("click", "buses", (e) => {
+      //   const props = e.features[0].properties;
+      //   fetch(`/api/bus-route?routeId=${encodeURIComponent(props.RouteID)}&directionText=${encodeURIComponent(props.DirectionText)}`)
+      //     .then((res) => res.json())
+      //     .then((shape) => {
+      //       if (!shape.length) return;
+      //       const coords = shape.map((pt) => [pt.Lon, pt.Lat]);
+      //       const src = map.getSource("bus-route");
+      //       if (src) src.setData({
+      //         type: "FeatureCollection",
+      //         features: [{
+      //           type: "Feature",
+      //           geometry: { type: "LineString", coordinates: coords },
+      //           properties: {},
+      //         }],
+      //       });
+      //     })
+      //     .catch((err) => console.error("Failed to load bus route:", err));
+      // });
+    </script>
+  </body>
+</html>

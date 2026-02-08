@@ -115,10 +115,26 @@ async function pollTrains() {
   }
 }
 
-/** Start polling for train positions at a fixed interval. */
+let polling = false;
+
+/** Start the async poll loop. No-op if already running. */
 export function startPolling(): void {
-  setInterval(pollTrains, POLL_INTERVAL_MS);
-  pollTrains();
+  if (polling) return;
+  polling = true;
+  (async () => {
+    while (polling) {
+      await pollTrains();
+      if (!polling) break;
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+    }
+  })();
+}
+
+/** Stop the poll loop and clear stale data. */
+export function stopPolling(): void {
+  polling = false;
+  latestSnapshot = [];
+  lastKnownCircuits.clear();
 }
 
 /** Return the latest full snapshot of all trains. */

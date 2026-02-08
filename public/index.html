@@ -132,16 +132,25 @@
             YL: "#FFD100",
           };
 
-          const TRAIN_PATH =
-            "M12 11a5 5 0 1 1 0 10a5 5 0 1 1 0-10 M6 8 L12 2 L18 8 L6 8 z";
+          const TRAIN_PATH = `M512 85.333333C341.333333 85.333333 170.666667 106.666667 170.666667 256v405.333333c0 82.346667 66.986667 149.333333 149.333333 149.333334l-64 64v21.333333h95.146667l85.333333-85.333333H597.333333l85.333334 85.333333h85.333333v-21.333333l-64-64c82.346667 0 149.333333-66.986667 149.333333-149.333334V256c0-149.333333-152.746667-170.666667-341.333333-170.666667z m-192 640c-35.413333 0-64-28.586667-64-64s28.586667-64 64-64 64 28.586667 64 64-28.586667 64-64 64z m149.333333-298.666666H256v-170.666667h213.333333v170.666667z m85.333334 0v-170.666667h213.333333v170.666667H554.666667z m149.333333 298.666666c-35.413333 0-64-28.586667-64-64s28.586667-64 64-64 64 28.586667 64 64-28.586667 64-64 64z`
+          const TRAIN_ARROW_PATH =
+            `M 384,871.92523 346.53984,908.36226 223.99999,789.16924 101.46016,908.36226 64,871.92523 l 37.42566,-36.40349 0.0344,0.0335 L 224,716.36226 l 122.53983,119.19302 0.0344,-0.0335 37.42568,36.4035 z`;
 
           const makeTrainMarker = (color) => ({
             type: "simple-marker",
             path: TRAIN_PATH,
             color,
-            size: 12,
+            size: 17,
             outline: { color: "#FFFFFF", width: 1 },
           });
+
+          const makeTrainArrowMarker = (color) => ({
+            type: "simple-marker",
+            path: TRAIN_ARROW_PATH,
+            size: 10,
+            yoffset: 13,
+            outline: { color: "#FFFFFF", width: 1 },
+          })
 
           const linesLayer = new GraphicsLayer();
           const busRouteLayer = new GraphicsLayer();
@@ -252,6 +261,39 @@
                 { value: "OR", symbol: makeTrainMarker("#ED8B00") },
                 { value: "SV", symbol: makeTrainMarker("#A2A4A1") },
                 { value: "YL", symbol: makeTrainMarker("#FFD100") },
+              ]
+            },
+          });
+
+          const trainArrowLayer = new FeatureLayer({
+            source: [],
+            objectIdField: "ObjectID",
+            geometryType: "point",
+            spatialReference: { wkid: 4326 },
+            fields: [
+              { name: "ObjectID", type: "oid" },
+              { name: "TrainId", type: "string" },
+              { name: "TrainNumber", type: "string" },
+              { name: "CarCount", type: "integer" },
+              { name: "DirectionNum", type: "integer" },
+              { name: "CircuitId", type: "integer" },
+              { name: "DestinationStationCode", type: "string" },
+              { name: "LineCode", type: "string" },
+              { name: "SecondsAtLocation", type: "integer" },
+              { name: "ServiceType", type: "string" },
+              { name: "Heading", type: "double" },
+            ],
+            renderer: {
+              type: "unique-value",
+              field: "LineCode",
+              defaultSymbol: makeTrainArrowMarker("#000000"),
+              uniqueValueInfos: [
+                { value: "RD", symbol: makeTrainArrowMarker("#E51636") },
+                { value: "BL", symbol: makeTrainArrowMarker("#0795D3") },
+                { value: "GR", symbol: makeTrainArrowMarker("#00B140") },
+                { value: "OR", symbol: makeTrainArrowMarker("#ED8B00") },
+                { value: "SV", symbol: makeTrainArrowMarker("#A2A4A1") },
+                { value: "YL", symbol: makeTrainArrowMarker("#FFD100") },
               ],
               visualVariables: [{
                 type: "rotation",
@@ -296,7 +338,7 @@
               symbol: {
                 type: "simple-marker",
                 color: "#FFFFFF",
-                size: 6,
+                size: 10,
                 outline: { color: "#000000", width: 1 },
               },
             },
@@ -324,6 +366,13 @@
             map,
             center: [-77.04, 38.9],
             zoom: 12,
+            popup: {
+             dockEnabled: true,
+             dockOptions: {
+               position: "bottom-left",
+               breakpoint: false
+             }
+            }
           });
 
           // Load metro lines from GeoJSON
@@ -379,12 +428,14 @@
               map.add(busRouteLayer);
               map.add(busesLayer);
               map.add(trainsLayer);
+              map.add(trainArrowLayer);
             })
             .catch((err) => {
               console.error("Failed to load stations:", err);
               map.add(busRouteLayer);
               map.add(busesLayer);
               map.add(trainsLayer);
+              map.add(trainArrowLayer);
             });
 
           // --- OID tracking ---
@@ -482,6 +533,7 @@
                 edits.updateFeatures = updateFeatures;
               }
               trainsLayer.applyEdits(edits);
+              trainArrowLayer.applyEdits(edits);
               updateCount(trainCountEl, trainOids);
             };
 
@@ -512,6 +564,15 @@
                 });
               }
             });
+
+            trainArrowLayer.queryFeatures().then((result) => {
+              if (result.features.length > 0) {
+                trainArrowLayer.applyEdits({
+                  deleteFeatures: result.features,
+                });
+              }
+            });
+
             trainOids = {};
             trainNextOid = 1;
             trainCountEl.textContent = "";
