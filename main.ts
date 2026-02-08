@@ -1,112 +1,41 @@
-import type { Point, TrainData, TrainPosition } from "./interfaces.d.ts";
-import { generateCircuitMap } from "./scripts/generate-map.ts";
-import type { CircuitMap } from "./scripts/generate-map.ts";
-import { getStations, getTrainPositions } from "./scripts/wmata-api.ts";
-
-const CIRCUIT_MAP_PATH = "circuit-map.json";
-const POLL_INTERVAL_MS = 5_000;
-
-/** Flatten the per-line circuit map into a single circuitId -> Point lookup. */
-function flattenCircuitMap(nested: CircuitMap): Record<number, Point> {
-  const flat: Record<number, Point> = {};
-  for (const lineMap of Object.values(nested)) {
-    for (const [id, point] of Object.entries(lineMap)) {
-      flat[Number(id)] = point;
-    }
-  }
-  return flat;
-}
-
-// Load circuit map from disk, or generate and save it
-async function loadCircuitMap(): Promise<Record<number, Point>> {
-  let nested: CircuitMap;
-  try {
-    const raw = await Deno.readTextFile(CIRCUIT_MAP_PATH);
-    console.log("Loaded circuit map from disk");
-    nested = JSON.parse(raw);
-  } catch {
-    console.log("Circuit map not found, generating...");
-    nested = await generateCircuitMap();
-    await Deno.writeTextFile(CIRCUIT_MAP_PATH, JSON.stringify(nested, null, 2));
-    console.log(`Generated circuit map`);
-  }
-  const flat = flattenCircuitMap(nested);
-  console.log(`Circuit map: ${Object.keys(flat).length} circuits`);
-  return flat;
-}
+import { loadCircuitMap } from "./scripts/generate-map.ts";
+import { getRouteShape, getStations } from "./scripts/wmata-api.ts";
+import {
+  getLatestSnapshot as getTrainSnapshot,
+  init as initTrains,
+  startPolling as startTrainPolling,
+} from "./trains.ts";
+import {
+  getLatestSnapshot as getBusSnapshot,
+  init as initBuses,
+  startPolling as startBusPolling,
+} from "./buses.ts";
 
 const circuitMap = await loadCircuitMap();
 
-// Track connected WebSocket clients
-const clients = new Set<WebSocket>();
+// Track connected WebSocket clients (separate sets for trains and buses)
+const trainClients = new Set<WebSocket>();
+const busClients = new Set<WebSocket>();
 
-// Last known circuit for each train, used to detect changes
-const lastKnownCircuits = new Map<string, number>();
+// Initialize modules and start polling
+await initTrains(circuitMap, trainClients);
+startTrainPolling();
 
-function enrichTrain(train: TrainPosition): TrainData | null {
-  const point = circuitMap[train.CircuitId];
-  if (!point) return null;
-  return { ...train, location: point };
-}
+initBuses(busClients);
+startBusPolling();
 
-function broadcast(data: TrainData[]) {
-  const message = JSON.stringify(data);
-  for (const client of clients) {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
-    }
-  }
-}
-
-async function pollTrains() {
-  try {
-    const positions = await getTrainPositions();
-    const allTrains: TrainData[] = [];
-    const changedTrains: TrainData[] = [];
-
-    for (const pos of positions) {
-      const enriched = enrichTrain(pos);
-      if (!enriched) continue;
-
-      allTrains.push(enriched);
-
-      const prevCircuit = lastKnownCircuits.get(pos.TrainId);
-      if (prevCircuit !== pos.CircuitId) {
-        changedTrains.push(enriched);
-        lastKnownCircuits.set(pos.TrainId, pos.CircuitId);
-      }
-    }
-
-    // Remove trains that are no longer reporting
-    const activeIds = new Set(positions.map((p) => p.TrainId));
-    for (const id of lastKnownCircuits.keys()) {
-      if (!activeIds.has(id)) {
-        lastKnownCircuits.delete(id);
-      }
-    }
-
-    // Store latest full snapshot for new connections
-    latestSnapshot = allTrains;
-
-    if (changedTrains.length > 0) {
-      broadcast(changedTrains);
-    }
-  } catch (err) {
-    console.error("Error polling trains:", err);
-  }
-}
-
-// Latest full snapshot for sending to newly connected clients
-let latestSnapshot: TrainData[] = [];
-
-function handleWebSocket(req: Request): Response {
+function handleWebSocket(
+  req: Request,
+  clients: Set<WebSocket>,
+  getSnapshot: () => unknown[],
+): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
 
   socket.onopen = () => {
     clients.add(socket);
-    // Send current snapshot immediately on connect
-    if (latestSnapshot.length > 0) {
-      socket.send(JSON.stringify(latestSnapshot));
+    const snapshot = getSnapshot();
+    if (snapshot.length > 0) {
+      socket.send(JSON.stringify(snapshot));
     }
   };
 
@@ -116,10 +45,6 @@ function handleWebSocket(req: Request): Response {
 
   return response;
 }
-
-// Start polling
-setInterval(pollTrains, POLL_INTERVAL_MS);
-pollTrains();
 
 const CONTENT_TYPES: Record<string, string> = {
   ".html": "text/html",
@@ -144,7 +69,14 @@ async function serveStatic(path: string): Promise<Response> {
 
 Deno.serve({ port: 8080 }, async (req) => {
   if (req.headers.get("upgrade") === "websocket") {
-    return handleWebSocket(req);
+    const wsUrl = new URL(req.url);
+    if (wsUrl.pathname === "/ws/trains") {
+      return handleWebSocket(req, trainClients, getTrainSnapshot);
+    }
+    if (wsUrl.pathname === "/ws/buses") {
+      return handleWebSocket(req, busClients, getBusSnapshot);
+    }
+    return new Response("Not Found", { status: 404 });
   }
 
   const url = new URL(req.url);
@@ -160,6 +92,24 @@ Deno.serve({ port: 8080 }, async (req) => {
     } catch (err) {
       console.error("Error fetching stations:", err);
       return new Response("Failed to fetch stations", { status: 500 });
+    }
+  }
+
+  // API: bus route shape
+  if (pathname === "/api/bus-route") {
+    const routeId = url.searchParams.get("routeId");
+    const directionText = url.searchParams.get("directionText");
+    if (!routeId || !directionText) {
+      return new Response("Missing routeId or directionText", { status: 400 });
+    }
+    try {
+      const shape = await getRouteShape(routeId, directionText);
+      return new Response(JSON.stringify(shape), {
+        headers: { "content-type": "application/json" },
+      });
+    } catch (err) {
+      console.error("Error fetching bus route:", err);
+      return new Response("Failed to fetch bus route", { status: 500 });
     }
   }
 

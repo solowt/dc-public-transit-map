@@ -7,6 +7,7 @@ export type Line = "RD" | "BL" | "GR" | "OR" | "SV" | "YL";
 
 export interface TrainData extends TrainPosition {
   location: Point;
+  heading: number;
 }
 
 export interface TrainPosition {
@@ -31,6 +32,20 @@ export interface StandardRoute {
   LineCode: Line;
   TrackNum: number;
   TrackCircuits: TrackCircuit[];
+}
+
+export interface BusPosition {
+  VehicleID: string;
+  Lat: number;
+  Lon: number;
+  RouteID: string;
+  DirectionText: string;
+  TripHeadsign: string;
+  Deviation: number;
+  DateTime: string;
+  TripEndTime: string;
+  TripStartTime: string;
+  TripID: string;
 }
 
 export interface Station {

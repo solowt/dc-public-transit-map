@@ -1,125 +1,305 @@
 <!DOCTYPE html>
 <html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>WMATA Train Map</title>
-  <link rel="stylesheet" href="https://js.arcgis.com/4.28/esri/themes/dark/main.css" />
-  <script src="https://js.arcgis.com/4.28/"></script>
-  <style>
-    html, body, #viewDiv {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-  </style>
-</head>
-<body>
-  <div id="viewDiv"></div>
-  <script>
-    require([
-      "esri/Map",
-      "esri/views/MapView",
-      "esri/layers/GraphicsLayer",
-      "esri/layers/FeatureLayer",
-      "esri/Graphic"
-    ], function (Map, MapView, GraphicsLayer, FeatureLayer, Graphic) {
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>WMATA Transit Map</title>
+    <link
+      rel="stylesheet"
+      href="https://js.arcgis.com/4.28/esri/themes/dark/main.css"
+    />
+    <script src="https://js.arcgis.com/4.28/"></script>
+    <style>
+      html, body, #viewDiv {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #togglePanel {
+        position: absolute;
+        top: 15px;
+        right: 15px;
+        background: rgba(36, 36, 36, 0.92);
+        border: 1px solid #444;
+        border-radius: 6px;
+        padding: 12px 16px;
+        color: #eee;
+        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
+        font-size: 13px;
+        z-index: 99;
+        min-width: 150px;
+      }
+      #togglePanel h3 {
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        font-weight: 600;
+        color: #aaa;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .toggle-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 6px;
+      }
+      .toggle-row:last-child {
+        margin-bottom: 0;
+      }
+      .toggle-row label {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        cursor: pointer;
+      }
+      .toggle-row input[type="checkbox"] {
+        accent-color: #4fc3f7;
+        width: 14px;
+        height: 14px;
+      }
+      .status {
+        font-size: 11px;
+        margin-left: 8px;
+      }
+      .status.live {
+        color: #66bb6a;
+      }
+      .status.connecting {
+        color: #ffa726;
+      }
+      .status.off {
+        color: #888;
+      }
+      .status.disconnected {
+        color: #ef5350;
+      }
+      .count {
+        font-size: 11px;
+        color: #999;
+        margin-left: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewDiv"></div>
+    <div id="togglePanel">
+      <h3>Layers</h3>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="trainToggle" checked /> Trains <span
+            id="trainCount"
+            class="count"
+          ></span></label>
+        <span id="trainStatus" class="status connecting">connecting...</span>
+      </div>
+      <div class="toggle-row">
+        <label><input type="checkbox" id="busToggle" /> Buses <span
+            id="busCount"
+            class="count"
+          ></span></label>
+        <span id="busStatus" class="status off">off</span>
+      </div>
+    </div>
+    <script>
+      require(
+        [
+          "esri/Map",
+          "esri/views/MapView",
+          "esri/layers/GraphicsLayer",
+          "esri/layers/FeatureLayer",
+          "esri/Graphic",
+          "esri/core/reactiveUtils",
+        ],
+        (
+          Map,
+          MapView,
+          GraphicsLayer,
+          FeatureLayer,
+          Graphic,
+          reactiveUtils,
+        ) => {
+          const LINE_COLORS = {
+            red: "#E51636",
+            blue: "#0795D3",
+            green: "#00B140",
+            orange: "#ED8B00",
+            silver: "#A2A4A1",
+            yellow: "#FFD100",
+            RD: "#E51636",
+            BL: "#0795D3",
+            GR: "#00B140",
+            OR: "#ED8B00",
+            SV: "#A2A4A1",
+            YL: "#FFD100",
+          };
 
-      var LINE_COLORS = {
-        red:    "#E51636",
-        blue:   "#0795D3",
-        green:  "#00B140",
-        orange: "#ED8B00",
-        silver: "#A2A4A1",
-        yellow: "#FFD100",
-        RD: "#E51636",
-        BL: "#0795D3",
-        GR: "#00B140",
-        OR: "#ED8B00",
-        SV: "#A2A4A1",
-        YL: "#FFD100"
-      };
+          const TRAIN_PATH =
+            "M12 11a5 5 0 1 1 0 10a5 5 0 1 1 0-10 M6 8 L12 2 L18 8 L6 8 z";
 
-      var linesLayer = new GraphicsLayer();
-      var trainsLayer = new GraphicsLayer();
+          const makeTrainMarker = (color) => ({
+            type: "simple-marker",
+            path: TRAIN_PATH,
+            color,
+            size: 12,
+            outline: { color: "#FFFFFF", width: 1 },
+          });
 
-      var map = new Map({
-        basemap: "dark-gray-vector",
-        layers: [linesLayer]
-      });
+          const linesLayer = new GraphicsLayer();
+          const busRouteLayer = new GraphicsLayer();
 
-      var view = new MapView({
-        container: "viewDiv",
-        map: map,
-        center: [-77.04, 38.9],
-        zoom: 12
-      });
-
-      // Load metro lines from GeoJSON
-      fetch("/data/Metro_Lines_Regional.geojson")
-        .then(function (res) { return res.json(); })
-        .then(function (geojson) {
-          geojson.features.forEach(function (feature) {
-            var name = feature.properties.NAME;
-            var color = LINE_COLORS[name] || "#FFFFFF";
-            var coords = feature.geometry.coordinates;
-
-            var graphic = new Graphic({
-              geometry: {
-                type: "polyline",
-                paths: [coords]
-              },
+          // --- Bus FeatureLayer ---
+          const busesLayer = new FeatureLayer({
+            source: [],
+            objectIdField: "ObjectID",
+            geometryType: "point",
+            spatialReference: { wkid: 4326 },
+            visible: false,
+            fields: [
+              { name: "ObjectID", type: "oid" },
+              { name: "VehicleID", type: "string" },
+              { name: "RouteID", type: "string" },
+              { name: "DirectionText", type: "string" },
+              { name: "TripHeadsign", type: "string" },
+              { name: "Deviation", type: "double" },
+              { name: "DateTime", type: "string" },
+            ],
+            popupTemplate: {
+              title: "Bus {VehicleID}",
+              content: [
+                {
+                  type: "fields",
+                  fieldInfos: [
+                    { fieldName: "VehicleID", label: "Vehicle ID" },
+                    { fieldName: "RouteID", label: "Route" },
+                    { fieldName: "DirectionText", label: "Direction" },
+                    { fieldName: "TripHeadsign", label: "Headsign" },
+                    {
+                      fieldName: "Deviation",
+                      label: "Deviation (min)",
+                    },
+                    { fieldName: "DateTime", label: "Last Updated" },
+                  ],
+                },
+              ],
+            },
+            renderer: {
+              type: "simple",
               symbol: {
-                type: "simple-line",
-                color: color,
-                width: 3
-              }
-            });
-            linesLayer.add(graphic);
-          });
-        })
-        .catch(function (err) {
-          console.error("Failed to load metro lines:", err);
-        });
-
-      // Load stations as a client-side FeatureLayer with labels
-      fetch("/api/stations")
-        .then(function (res) { return res.json(); })
-        .then(function (stations) {
-          var features = stations.map(function (station, i) {
-            return new Graphic({
-              geometry: {
-                type: "point",
-                longitude: station.Lon,
-                latitude: station.Lat
+                type: "simple-marker",
+                color: "#4fc3f7",
+                size: 5,
+                outline: { color: "#FFFFFF", width: 0.5 },
               },
-              attributes: {
-                ObjectID: i,
-                Name: station.Name,
-                Code: station.Code,
-                LineCode1: station.LineCode1 || ""
-              }
-            });
+            },
           });
 
-          var stationsLayer = new FeatureLayer({
-            source: features,
+          // --- Train FeatureLayer ---
+          const trainsLayer = new FeatureLayer({
+            source: [],
+            objectIdField: "ObjectID",
+            geometryType: "point",
+            spatialReference: { wkid: 4326 },
+            fields: [
+              { name: "ObjectID", type: "oid" },
+              { name: "TrainId", type: "string" },
+              { name: "TrainNumber", type: "string" },
+              { name: "CarCount", type: "integer" },
+              { name: "DirectionNum", type: "integer" },
+              { name: "CircuitId", type: "integer" },
+              { name: "DestinationStationCode", type: "string" },
+              { name: "LineCode", type: "string" },
+              { name: "SecondsAtLocation", type: "integer" },
+              { name: "ServiceType", type: "string" },
+              { name: "Heading", type: "double" },
+            ],
+            popupTemplate: {
+              title: "Train {TrainId}",
+              content: [
+                {
+                  type: "fields",
+                  fieldInfos: [
+                    { fieldName: "TrainId", label: "Train ID" },
+                    { fieldName: "TrainNumber", label: "Train Number" },
+                    { fieldName: "LineCode", label: "Line" },
+                    { fieldName: "CarCount", label: "Cars" },
+                    { fieldName: "DirectionNum", label: "Direction" },
+                    { fieldName: "CircuitId", label: "Circuit ID" },
+                    {
+                      fieldName: "DestinationStationCode",
+                      label: "Destination",
+                    },
+                    {
+                      fieldName: "SecondsAtLocation",
+                      label: "Seconds at Location",
+                    },
+                    { fieldName: "ServiceType", label: "Service Type" },
+                    {
+                      fieldName: "Heading",
+                      label: "Heading",
+                      format: { digitSeparator: false, places: 1 },
+                    },
+                  ],
+                },
+              ],
+            },
+            renderer: {
+              type: "unique-value",
+              field: "LineCode",
+              defaultSymbol: makeTrainMarker("#000000"),
+              uniqueValueInfos: [
+                { value: "RD", symbol: makeTrainMarker("#E51636") },
+                { value: "BL", symbol: makeTrainMarker("#0795D3") },
+                { value: "GR", symbol: makeTrainMarker("#00B140") },
+                { value: "OR", symbol: makeTrainMarker("#ED8B00") },
+                { value: "SV", symbol: makeTrainMarker("#A2A4A1") },
+                { value: "YL", symbol: makeTrainMarker("#FFD100") },
+              ],
+              visualVariables: [{
+                type: "rotation",
+                field: "Heading",
+                rotationType: "geographic",
+              }],
+            },
+          });
+
+          const stationsLayer = new FeatureLayer({
+            source: [],
+            geometryType: "point",
             objectIdField: "ObjectID",
             fields: [
               { name: "ObjectID", type: "oid" },
               { name: "Name", type: "string" },
               { name: "Code", type: "string" },
-              { name: "LineCode1", type: "string" }
+              { name: "LineCode1", type: "string" },
+              { name: "LineCode2", type: "string" },
+              { name: "LineCode3", type: "string" },
+              { name: "LineCode4", type: "string" },
+              { name: "Address", type: "string" },
             ],
+            popupTemplate: {
+              title: "{Name}",
+              content: [
+                {
+                  type: "fields",
+                  fieldInfos: [
+                    { fieldName: "Code", label: "Station Code" },
+                    { fieldName: "LineCode1", label: "Line 1" },
+                    { fieldName: "LineCode2", label: "Line 2" },
+                    { fieldName: "LineCode3", label: "Line 3" },
+                    { fieldName: "LineCode4", label: "Line 4" },
+                    { fieldName: "Address", label: "Address" },
+                  ],
+                },
+              ],
+            },
             renderer: {
               type: "simple",
               symbol: {
                 type: "simple-marker",
                 color: "#FFFFFF",
                 size: 6,
-                outline: { color: "#000000", width: 1 }
-              }
+                outline: { color: "#000000", width: 1 },
+              },
             },
             labelingInfo: [{
               labelExpressionInfo: { expression: "$feature.Name" },
@@ -128,74 +308,352 @@
                 color: "#FFFFFF",
                 haloColor: "#000000",
                 haloSize: 1,
-                font: { size: 9, weight: "bold" }
+                font: { size: 9, weight: "bold" },
               },
               labelPlacement: "above-right",
-              minScale: 150000
-            }]
+              minScale: 150000,
+            }],
           });
 
-          map.add(stationsLayer);
-          // Trains on top of stations
-          map.add(trainsLayer);
-        })
-        .catch(function (err) {
-          console.error("Failed to load stations:", err);
-          // Still add trains layer even if stations fail
-          map.add(trainsLayer);
-        });
+          const map = new Map({
+            basemap: "dark-gray-vector",
+            layers: [linesLayer],
+          });
 
-      // Track train graphics by TrainId
-      var trainGraphics = {};
+          const view = new MapView({
+            container: "viewDiv",
+            map,
+            center: [-77.04, 38.9],
+            zoom: 12,
+          });
 
-      // Connect to WebSocket
-      var wsProtocol = location.protocol === "https:" ? "wss:" : "ws:";
-      var ws = new WebSocket(wsProtocol + "//" + location.host);
+          // Load metro lines from GeoJSON
+          fetch("/data/Metro_Lines_Regional.geojson")
+            .then((res) => res.json())
+            .then((geojson) => {
+              for (const feature of geojson.features) {
+                const name = feature.properties.NAME;
+                const color = LINE_COLORS[name] || "#FFFFFF";
+                const coords = feature.geometry.coordinates;
 
-      ws.onmessage = function (event) {
-        var trains = JSON.parse(event.data);
+                linesLayer.add(
+                  new Graphic({
+                    geometry: { type: "polyline", paths: [coords] },
+                    symbol: { type: "simple-line", color, width: 3 },
+                  }),
+                );
+              }
+            })
+            .catch((err) =>
+              console.error("Failed to load metro lines:", err)
+            );
 
-        trains.forEach(function (train) {
-          var id = train.TrainId;
-          var color = LINE_COLORS[train.LineCode] || "#888888";
-          var point = {
-            type: "point",
-            longitude: train.location.longitude,
-            latitude: train.location.latitude
+          // Load stations
+          fetch("/api/stations")
+            .then((res) => res.json())
+            .then((stations) => {
+              const features = stations.map((station, i) =>
+                new Graphic({
+                  geometry: {
+                    type: "point",
+                    longitude: station.Lon,
+                    latitude: station.Lat,
+                  },
+                  attributes: {
+                    ObjectID: i,
+                    Name: station.Name,
+                    Code: station.Code,
+                    LineCode1: station.LineCode1 || "",
+                    LineCode2: station.LineCode2 || "",
+                    LineCode3: station.LineCode3 || "",
+                    LineCode4: station.LineCode4 || "",
+                    Address: station.Address
+                      ? `${station.Address.Street}, ${station.Address.City}, ${station.Address.State} ${station.Address.Zip}`
+                      : "",
+                  },
+                })
+              );
+
+              stationsLayer.applyEdits({ addFeatures: features });
+
+              map.add(stationsLayer);
+              map.add(busRouteLayer);
+              map.add(busesLayer);
+              map.add(trainsLayer);
+            })
+            .catch((err) => {
+              console.error("Failed to load stations:", err);
+              map.add(busRouteLayer);
+              map.add(busesLayer);
+              map.add(trainsLayer);
+            });
+
+          // --- OID tracking ---
+          let trainOids = {};
+          let trainNextOid = 1;
+          let busOids = {};
+          let busNextOid = 1;
+
+          // --- WebSocket helpers ---
+          const wsProtocol = location.protocol === "https:"
+            ? "wss:"
+            : "ws:";
+          let trainWs = null;
+          let busWs = null;
+
+          const trainStatusEl = document.getElementById("trainStatus");
+          const busStatusEl = document.getElementById("busStatus");
+          const trainToggleEl = document.getElementById("trainToggle");
+          const busToggleEl = document.getElementById("busToggle");
+          const trainCountEl = document.getElementById("trainCount");
+          const busCountEl = document.getElementById("busCount");
+
+          const setStatus = (el, state) => {
+            const labels = {
+              live: "live",
+              connecting: "connecting...",
+              off: "off",
+              disconnected: "disconnected",
+            };
+            el.textContent = labels[state] || state;
+            el.className = "status " + state;
           };
 
-          if (trainGraphics[id]) {
-            trainGraphics[id].geometry = point;
-            trainGraphics[id].symbol = {
-              type: "simple-marker",
-              color: color,
-              size: 8,
-              outline: { color: "#FFFFFF", width: 1 }
+          const updateCount = (el, oids) => {
+            const n = Object.keys(oids).length;
+            el.textContent = n > 0 ? `(${n})` : "";
+          };
+
+          // --- Train connection ---
+          const connectTrains = () => {
+            if (trainWs) return;
+            linesLayer.visible = true;
+            stationsLayer.visible = true;
+            setStatus(trainStatusEl, "connecting");
+            trainWs = new WebSocket(
+              `${wsProtocol}//${location.host}/ws/trains`,
+            );
+
+            trainWs.onopen = () => {
+              setStatus(trainStatusEl, "live");
             };
-          } else {
-            var graphic = new Graphic({
-              geometry: point,
-              symbol: {
-                type: "simple-marker",
-                color: color,
-                size: 8,
-                outline: { color: "#FFFFFF", width: 1 }
+
+            trainWs.onmessage = (event) => {
+              const trains = JSON.parse(event.data);
+              const addFeatures = [];
+              const updateFeatures = [];
+
+              for (const train of trains) {
+                const graphic = new Graphic({
+                  geometry: {
+                    type: "point",
+                    longitude: train.location.longitude,
+                    latitude: train.location.latitude,
+                  },
+                  attributes: {
+                    TrainId: train.TrainId,
+                    TrainNumber: train.TrainNumber,
+                    CarCount: train.CarCount,
+                    DirectionNum: train.DirectionNum,
+                    CircuitId: train.CircuitId,
+                    DestinationStationCode:
+                      train.DestinationStationCode || "",
+                    LineCode: train.LineCode || "",
+                    SecondsAtLocation: train.SecondsAtLocation,
+                    ServiceType: train.ServiceType,
+                    Heading: train.heading,
+                  },
+                });
+
+                if (trainOids[train.TrainId] !== undefined) {
+                  graphic.attributes.ObjectID =
+                    trainOids[train.TrainId];
+                  updateFeatures.push(graphic);
+                } else {
+                  const oid = trainNextOid++;
+                  trainOids[train.TrainId] = oid;
+                  graphic.attributes.ObjectID = oid;
+                  addFeatures.push(graphic);
+                }
+              }
+
+              const edits = {};
+              if (addFeatures.length) edits.addFeatures = addFeatures;
+              if (updateFeatures.length) {
+                edits.updateFeatures = updateFeatures;
+              }
+              trainsLayer.applyEdits(edits);
+              updateCount(trainCountEl, trainOids);
+            };
+
+            trainWs.onclose = () => {
+              trainWs = null;
+              if (trainToggleEl.checked) {
+                setStatus(trainStatusEl, "disconnected");
+              }
+            };
+
+            trainWs.onerror = () => {
+              console.error("Train WebSocket error");
+            };
+          };
+
+          const disconnectTrains = () => {
+            stationsLayer.visible = false;
+            linesLayer.visible = false;
+            if (trainWs) {
+              trainWs.onclose = null;
+              trainWs.close();
+              trainWs = null;
+            }
+            trainsLayer.queryFeatures().then((result) => {
+              if (result.features.length > 0) {
+                trainsLayer.applyEdits({
+                  deleteFeatures: result.features,
+                });
               }
             });
-            trainGraphics[id] = graphic;
-            trainsLayer.add(graphic);
-          }
-        });
-      };
+            trainOids = {};
+            trainNextOid = 1;
+            trainCountEl.textContent = "";
+            setStatus(trainStatusEl, "off");
+          };
 
-      ws.onclose = function () {
-        console.log("WebSocket closed");
-      };
+          // --- Bus connection ---
+          const connectBuses = () => {
+            if (busWs) return;
+            setStatus(busStatusEl, "connecting");
+            busWs = new WebSocket(
+              `${wsProtocol}//${location.host}/ws/buses`,
+            );
 
-      ws.onerror = function (err) {
-        console.error("WebSocket error:", err);
-      };
-    });
-  </script>
-</body>
+            busWs.onopen = () => {
+              setStatus(busStatusEl, "live");
+            };
+
+            busWs.onmessage = (event) => {
+              const buses = JSON.parse(event.data);
+              const addFeatures = [];
+              const updateFeatures = [];
+
+              for (const bus of buses) {
+                const graphic = new Graphic({
+                  geometry: {
+                    type: "point",
+                    longitude: bus.Lon,
+                    latitude: bus.Lat,
+                  },
+                  attributes: {
+                    VehicleID: bus.VehicleID,
+                    RouteID: bus.RouteID,
+                    DirectionText: bus.DirectionText || "",
+                    TripHeadsign: bus.TripHeadsign || "",
+                    Deviation: bus.Deviation,
+                    DateTime: bus.DateTime || "",
+                  },
+                });
+
+                if (busOids[bus.VehicleID] !== undefined) {
+                  graphic.attributes.ObjectID = busOids[bus.VehicleID];
+                  updateFeatures.push(graphic);
+                } else {
+                  const oid = busNextOid++;
+                  busOids[bus.VehicleID] = oid;
+                  graphic.attributes.ObjectID = oid;
+                  addFeatures.push(graphic);
+                }
+              }
+
+              const edits = {};
+              if (addFeatures.length) edits.addFeatures = addFeatures;
+              if (updateFeatures.length) {
+                edits.updateFeatures = updateFeatures;
+              }
+              busesLayer.applyEdits(edits);
+              updateCount(busCountEl, busOids);
+            };
+
+            busWs.onclose = () => {
+              busWs = null;
+              if (busToggleEl.checked) {
+                setStatus(busStatusEl, "disconnected");
+              }
+            };
+
+            busWs.onerror = () => {
+              console.error("Bus WebSocket error");
+            };
+          };
+
+          const disconnectBuses = () => {
+            if (busWs) {
+              busWs.onclose = null;
+              busWs.close();
+              busWs = null;
+            }
+            busesLayer.queryFeatures().then((result) => {
+              if (result.features.length > 0) {
+                busesLayer.applyEdits({
+                  deleteFeatures: result.features,
+                });
+              }
+            });
+            busOids = {};
+            busNextOid = 1;
+            busCountEl.textContent = "";
+            setStatus(busStatusEl, "off");
+          };
+
+          // --- Toggle handlers ---
+          trainToggleEl.addEventListener("change", function () {
+            if (this.checked) {
+              trainsLayer.visible = true;
+              connectTrains();
+            } else {
+              trainsLayer.visible = false;
+              disconnectTrains();
+            }
+          });
+
+          busToggleEl.addEventListener("change", function () {
+            if (this.checked) {
+              busesLayer.visible = true;
+              connectBuses();
+            } else {
+              busesLayer.visible = false;
+              disconnectBuses();
+            }
+          });
+
+          // --- Bus route display on popup ---
+
+          // reactiveUtils.watch(() => view.popup?.selectedFeature, (feature) => {
+          //   busRouteLayer.removeAll();
+          //   if (!feature) return;
+          //   const attrs = feature.attributes;
+          //   if (attrs.RouteID === undefined || attrs.DirectionText === undefined) return;
+
+          //   fetch(`/api/bus-route?routeId=${encodeURIComponent(attrs.RouteID)}&directionText=${encodeURIComponent(attrs.DirectionText)}`)
+          //     .then((res) => res.json())
+          //     .then((shape) => {
+          //       if (!shape.length) return;
+          //       const path = shape.map((pt) => [pt.Lon, pt.Lat]);
+          //       busRouteLayer.add(new Graphic({
+          //         geometry: { type: "polyline", paths: [path] },
+          //         symbol: { type: "simple-line", color: "#4fc3f7", width: 3, style: "solid" }
+          //       }));
+          //     })
+          //     .catch((err) => console.error("Failed to load bus route:", err));
+          // });
+
+          // reactiveUtils.watch(() => view.popup?.visible, (visible) => {
+          //   if (view.popup && !visible) busRouteLayer.removeAll();
+          // });
+
+          // --- Initial connection: trains only ---
+          connectTrains();
+        },
+      );
+    </script>
+  </body>
 </html>

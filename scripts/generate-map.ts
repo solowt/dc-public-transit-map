@@ -7,7 +7,8 @@ import {
 } from "./polyline.ts";
 import type { Coord, Polyline } from "./polyline.ts";
 
-const GEOJSON_PATH = new URL("../data/Metro_Lines_Regional.geojson", import.meta.url).pathname;
+const GEOJSON_PATH =
+  new URL("../data/Metro_Lines_Regional.geojson", import.meta.url).pathname;
 
 const NAME_TO_LINE: Record<string, Line> = {
   red: "RD",
@@ -76,7 +77,10 @@ export async function generateCircuitMap(): Promise<CircuitMap> {
       const code = circuits[i].StationCode;
       if (code && stationLocations.has(code)) {
         const pt = stationLocations.get(code)!;
-        const param = projectOntoPolyline(polyline, [pt.longitude, pt.latitude]);
+        const param = projectOntoPolyline(polyline, [
+          pt.longitude,
+          pt.latitude,
+        ]);
         anchors.push({ index: i, param, point: pt });
       }
     }
@@ -121,6 +125,37 @@ export async function generateCircuitMap(): Promise<CircuitMap> {
   return circuitMap;
 }
 
+const CIRCUIT_MAP_PATH = "circuit-map.json";
+
+/** Flatten the per-line circuit map into a single circuitId -> Point lookup. */
+function flattenCircuitMap(nested: CircuitMap): Record<number, Point> {
+  const flat: Record<number, Point> = {};
+  for (const lineMap of Object.values(nested)) {
+    for (const [id, point] of Object.entries(lineMap)) {
+      flat[Number(id)] = point;
+    }
+  }
+  return flat;
+}
+
+/** Load circuit map from disk, or generate and save it. Returns flat circuitId -> Point lookup. */
+export async function loadCircuitMap(): Promise<Record<number, Point>> {
+  let nested: CircuitMap;
+  try {
+    const raw = await Deno.readTextFile(CIRCUIT_MAP_PATH);
+    console.log("Loaded circuit map from disk");
+    nested = JSON.parse(raw);
+  } catch {
+    console.log("Circuit map not found, generating...");
+    nested = await generateCircuitMap();
+    await Deno.writeTextFile(CIRCUIT_MAP_PATH, JSON.stringify(nested, null, 2));
+    console.log("Generated circuit map");
+  }
+  const flat = flattenCircuitMap(nested);
+  console.log(`Circuit map: ${Object.keys(flat).length} circuits`);
+  return flat;
+}
+
 if (import.meta.main) {
   const map = await generateCircuitMap();
   const totalCircuits = Object.values(map).reduce(
@@ -129,6 +164,8 @@ if (import.meta.main) {
   );
   await Deno.writeTextFile("circuit-map.json", JSON.stringify(map, null, 2));
   console.log(
-    `Generated circuit map: ${Object.keys(map).length} lines, ${totalCircuits} total circuits`,
+    `Generated circuit map: ${
+      Object.keys(map).length
+    } lines, ${totalCircuits} total circuits`,
   );
 }
