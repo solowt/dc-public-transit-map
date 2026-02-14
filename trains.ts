@@ -11,6 +11,9 @@ let clients: Set<WebSocket>;
 const nextCircuit = new Map<number, number>();
 const prevCircuit = new Map<number, number>();
 
+// Station code → set of circuit IDs where that station is located
+const stationCircuits = new Map<string, Set<number>>();
+
 // Train state
 const lastKnownCircuits = new Map<string, number>();
 let latestSnapshot: TrainData[] = [];
@@ -29,6 +32,16 @@ export async function init(
     for (let i = 0; i < circuits.length - 1; i++) {
       nextCircuit.set(circuits[i].CircuitId, circuits[i + 1].CircuitId);
       prevCircuit.set(circuits[i + 1].CircuitId, circuits[i].CircuitId);
+    }
+    for (const tc of circuits) {
+      if (tc.StationCode) {
+        let set = stationCircuits.get(tc.StationCode);
+        if (!set) {
+          set = new Set();
+          stationCircuits.set(tc.StationCode, set);
+        }
+        set.add(tc.CircuitId);
+      }
     }
   }
   console.log(`Circuit adjacency: ${nextCircuit.size} entries`);
@@ -69,8 +82,8 @@ function enrichTrain(train: TrainPosition): TrainData | null {
   return { ...train, location: point, heading };
 }
 
-function broadcast(data: TrainData[]) {
-  const message = JSON.stringify(data);
+function broadcast(updates: TrainData[], removals: string[] = []) {
+  const message = JSON.stringify({ updates, removals });
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
@@ -99,16 +112,18 @@ async function pollTrains() {
 
     // Remove trains that are no longer reporting
     const activeIds = new Set(positions.map((p) => p.TrainId));
+    const removedIds: string[] = [];
     for (const id of lastKnownCircuits.keys()) {
       if (!activeIds.has(id)) {
         lastKnownCircuits.delete(id);
+        removedIds.push(id);
       }
     }
 
     latestSnapshot = allTrains;
 
-    if (changedTrains.length > 0) {
-      broadcast(changedTrains);
+    if (changedTrains.length > 0 || removedIds.length > 0) {
+      broadcast(changedTrains, removedIds);
     }
   } catch (err) {
     console.error("Error polling trains:", err);
@@ -137,7 +152,40 @@ export function stopPolling(): void {
   lastKnownCircuits.clear();
 }
 
-/** Return the latest full snapshot of all trains. */
-export function getLatestSnapshot(): TrainData[] {
+/** Return the latest train data array. */
+export function getTrains(): TrainData[] {
   return latestSnapshot;
+}
+
+const MAX_CIRCUIT_HOPS = 500;
+
+/**
+ * Count how many circuit hops it takes to walk forward from a train's circuit
+ * to a station. Returns -1 if the station is not reachable (train has passed it).
+ */
+export function circuitDistanceToStation(
+  circuitId: number,
+  directionNum: number,
+  stationCode: string,
+): number {
+  const targetCircuits = stationCircuits.get(stationCode);
+  if (!targetCircuits) return -1;
+  if (targetCircuits.has(circuitId)) return 0;
+
+  // Dir 1 travels forward (next), Dir 2 travels backward (prev)
+  const forward = directionNum === 1 ? nextCircuit : prevCircuit;
+
+  let current = circuitId;
+  for (let hops = 1; hops <= MAX_CIRCUIT_HOPS; hops++) {
+    const next = forward.get(current);
+    if (next === undefined) break;
+    if (targetCircuits.has(next)) return hops;
+    current = next;
+  }
+  return -1;
+}
+
+/** Return the latest full snapshot of all trains (wrapped for protocol). */
+export function getLatestSnapshot(): { updates: TrainData[]; removals: string[] } {
+  return { updates: latestSnapshot, removals: [] };
 }

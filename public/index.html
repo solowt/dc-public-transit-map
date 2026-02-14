@@ -6,60 +6,97 @@
     <title>WMATA Transit Map</title>
     <link
       rel="stylesheet"
-      href="https://js.arcgis.com/4.28/esri/themes/dark/main.css"
+      href="https://js.arcgis.com/4.34/esri/themes/dark/main.css"
     />
-    <script src="https://js.arcgis.com/4.28/"></script>
+    <script src="https://js.arcgis.com/4.34/"></script>
+    <script type="module" src="https://js.arcgis.com/calcite-components/5.0"></script>
+    <script type="module" src="https://js.arcgis.com/4.34/map-components/"></script>
     <style>
+      :root {
+        --sheet-peek: 34px;
+        --sheet-min: 200px;
+        --sheet-mid: 50vh;
+        --sheet-max: 85vh;
+        --sheet-full: 100vh;
+      }
       html, body, #viewDiv {
         margin: 0;
         padding: 0;
         width: 100%;
         height: 100%;
       }
-      #togglePanel {
-        font-size: large;
-        position: absolute;
-        top: 15px;
-        right: 15px;
-        background: rgba(36, 36, 36, 0.92);
-        border: 1px solid #444;
-        border-radius: 6px;
-        padding: 12px 16px;
-        color: #eee;
-        font-family: "Avenir Next", "Helvetica Neue", sans-serif;
-        z-index: 99;
-        min-width: 225px;
+      /* styles for small screens */
+      @media (max-width: 768px) {
+        #viewDiv {
+          height: auto;
+          flex: 1;
+        }
+        body {
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-start;
+          align-items: stretch;
+        }
+        .panel-holder {
+          overscroll-behavior: contain;
+          max-height: var(--sheet-full);
+          min-height: var(--sheet-peek);
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .panel-holder > calcite-panel {
+          flex: 1;
+          overflow-y: auto;
+        }
+        div.sheet-handle {
+          height: 34px;
+          display: grid;
+          place-items: center;
+          cursor: grab;
+          user-select: none;
+          -webkit-user-select: none;
+          touch-action: none;
+          background: #373938;
+          flex-shrink: 0;
+        }
+        .sheet-handle::before {
+          content: "";
+          width: 44px;
+          height: 5px;
+          border-radius: 999px;
+          background: rgba(255,255,255,.3);
+        }
       }
-      #togglePanel h3 {
-        margin: 0 0 8px 0;
-        font-size: larger;
-        font-weight: 600;
-        color: #aaa;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
+      .sheet-handle {
+        display: none;
       }
-      .toggle-row {
+      @media (min-width: 769px) {
+        .panel-holder {
+          position: fixed;
+          top: 15px;
+          right: 15px;
+          width: 300px;
+          z-index: 1;
+        }
+      }
+      .ws-loader {
+        opacity: 0;
+        transition: opacity 150ms ease;
+        margin-left: 4px;
+      }
+      .ws-loader.active {
+        opacity: 1;
+      }
+      .layers-panel calcite-tabs {
+        padding-bottom: 1rem;
+      }
+      .layer-tab-content {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        margin-bottom: 6px;
-      }
-      .toggle-row:last-child {
-        margin-bottom: 0;
-      }
-      .toggle-row label {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        cursor: pointer;
-      }
-      .toggle-row input[type="checkbox"] {
-        accent-color: #4fc3f7;
-        width: 14px;
-        height: 14px;
-      }
-      .status {
-        margin-left: 8px;
+        gap: .5rem;
+        padding: 1rem 1rem 1rem 1rem;
+        --calcite-label-margin-bottom: 0;
       }
       .status.live {
         color: #66bb6a;
@@ -73,51 +110,122 @@
       .status.disconnected {
         color: #ef5350;
       }
+      .status.reconnecting {
+        color: #ffa726;
+      }
       .count {
         font-size: 12px;
         color: #999;
         margin-left: 4px;
       }
+      #stationSearch, #busRouteSearch {
+        margin-left: 1rem;
+        margin-right: 1rem;
+      }
+      #stationDetails, #busRouteDetails {
+        padding: 1rem 1rem 0 1rem;
+        --calcite-label-margin-bottom: 0;
+      }
+      #aboutNotice {
+        display: none;
+        position: fixed;
+        top: 30px;
+        left: 15px;
+        right: 15px;
+        z-index: 1;
+      }
+      .arrival-line {
+        display: inline-block;
+        width: 8px;
+        height: 8px;
+        border-radius: 50%;
+        margin-right: 6px;
+        vertical-align: middle;
+      }
+      .arrival-min {
+        font-weight: bold;
+      }
+      .text-ellipsis {
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     </style>
   </head>
-  <body>
-    <div id="viewDiv"></div>
-    <div id="togglePanel">
-      <h3>Layers</h3>
-      <div class="toggle-row">
-        <label><input type="checkbox" id="trainToggle" checked /> Trains <span
-            id="trainCount"
-            class="count"
-          ></span></label>
-        <span id="trainStatus" class="status connecting">connecting...</span>
-      </div>
-      <div class="toggle-row">
-        <label><input type="checkbox" id="busToggle" /> Buses <span
-            id="busCount"
-            class="count"
-          ></span></label>
-        <span id="busStatus" class="status off">off</span>
-      </div>
+  <body class="calcite-mode-dark">
+    <arcgis-map id="viewDiv" basemap="dark-gray-vector" center="-77.04,38.9" zoom="12">
+      <arcgis-track slot="bottom-left" go-to-location-disabled></arcgis-track>
+    </arcgis-map>
+    <calcite-notice id="aboutNotice" closable icon="map" scale="l" width="auto">
+      <span slot="title">WMATA Transit Map</span>
+      <span slot="message">Real-time train and bus positions via the WMATA API. Use the tools to toggle vehicles and search for stations. Click or search for a station to view arrivals and station entrancess. </span>
+    </calcite-notice>
+    <div class="panel-holder">
+      <div class="sheet-handle"></div>
+      <calcite-panel scale="l" class="layers-panel" style="--calcite-panel-width: 260px;">
+        <calcite-tabs scale="l">
+          <calcite-tab-nav slot="title-group">
+            <calcite-tab-title selected>Trains</calcite-tab-title>
+            <calcite-tab-title>Buses</calcite-tab-title>
+          </calcite-tab-nav>
+          <calcite-tab selected>
+            <div class="layer-tab-content">
+              <calcite-label layout="inline">
+                <calcite-checkbox class="trains-check" checked></calcite-checkbox>
+                Show trains
+              </calcite-label>
+              <span id="trainCount" class="count"></span>
+              <span id="trainStatus" class="status connecting">connecting...</span>
+              <calcite-loader class="ws-loader" id="trainLoader" type="indeterminate" scale="s" inline></calcite-loader>
+            </div>
+            <calcite-combobox id="stationSearch" placeholder="Search stations" selection-mode="single">
+            </calcite-combobox>
+            <div id="stationDetails" style="display:none;">
+              <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 12px;">
+                <calcite-label layout="inline" style="margin:0;">
+                  <calcite-switch id="entrancesToggle"></calcite-switch>
+                  Show entrances
+                </calcite-label>
+                <calcite-button id="gotoStation" appearance="transparent" icon-start="pin" scale="s" kind="neutral">Station</calcite-button>
+              </div>
+              <calcite-list id="arrivalsList" selection-mode="single"></calcite-list>
+            </div>
+          </calcite-tab>
+          <calcite-tab>
+            <div class="layer-tab-content">
+              <calcite-label layout="inline">
+                <calcite-checkbox class="buses-check"></calcite-checkbox>
+                Show buses
+              </calcite-label>
+              <span id="busCount" class="count"></span>
+              <span id="busStatus" class="status off">off</span>
+              <calcite-loader class="ws-loader" id="busLoader" type="indeterminate" scale="s" inline></calcite-loader>
+            </div>
+            <calcite-combobox id="busRouteSearch" placeholder="Filter by route" selection-mode="single" style="display:none">
+            </calcite-combobox>
+            <div id="busRouteDetails" style="display:none;">
+              <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 12px;">
+                <calcite-label layout="inline" style="margin:0;">
+                  <calcite-switch id="busStopsToggle"></calcite-switch>
+                  Show stops
+                </calcite-label>
+                <calcite-button id="gotoBusRoute" appearance="transparent" icon-start="pin" scale="s" kind="neutral">Buses</calcite-button>
+              </div>
+            </div>
+          </calcite-tab>
+        </calcite-tabs>
+      </calcite-panel>
     </div>
-    <script>
-      require(
-        [
-          "esri/Map",
-          "esri/views/MapView",
-          "esri/layers/GraphicsLayer",
-          "esri/layers/FeatureLayer",
-          "esri/Graphic",
-          "esri/core/reactiveUtils",
-        ],
-        (
-          Map,
-          MapView,
-          GraphicsLayer,
-          FeatureLayer,
-          Graphic,
-          reactiveUtils,
-        ) => {
-          const LINE_COLORS = {
+    <script type="module">
+      const [GraphicsLayer, FeatureLayer, Graphic, reactiveUtils] =
+        await $arcgis.import([
+          "@arcgis/core/layers/GraphicsLayer.js",
+          "@arcgis/core/layers/FeatureLayer.js",
+          "@arcgis/core/Graphic.js",
+          "@arcgis/core/core/reactiveUtils.js",
+        ]);
+
+      const LINE_COLORS = {
             red: "#E51636",
             blue: "#0795D3",
             green: "#00B140",
@@ -132,25 +240,116 @@
             YL: "#FFD100",
           };
 
-          const TRAIN_PATH = `M512 85.333333C341.333333 85.333333 170.666667 106.666667 170.666667 256v405.333333c0 82.346667 66.986667 149.333333 149.333333 149.333334l-64 64v21.333333h95.146667l85.333333-85.333333H597.333333l85.333334 85.333333h85.333333v-21.333333l-64-64c82.346667 0 149.333333-66.986667 149.333333-149.333334V256c0-149.333333-152.746667-170.666667-341.333333-170.666667z m-192 640c-35.413333 0-64-28.586667-64-64s28.586667-64 64-64 64 28.586667 64 64-28.586667 64-64 64z m149.333333-298.666666H256v-170.666667h213.333333v170.666667z m85.333334 0v-170.666667h213.333333v170.666667H554.666667z m149.333333 298.666666c-35.413333 0-64-28.586667-64-64s28.586667-64 64-64 64 28.586667 64 64-28.586667 64-64 64z`
-          const TRAIN_ARROW_PATH =
-            `M 384,871.92523 346.53984,908.36226 223.99999,789.16924 101.46016,908.36226 64,871.92523 l 37.42566,-36.40349 0.0344,0.0335 L 224,716.36226 l 122.53983,119.19302 0.0344,-0.0335 37.42568,36.4035 z`;
+          const LINE_RGBA = {
+            red:    [229, 22, 54, 255],
+            blue:   [7, 149, 211, 255],
+            green:  [0, 177, 64, 255],
+            orange: [237, 139, 0, 255],
+            silver: [162, 164, 161, 255],
+            yellow: [255, 209, 0, 255],
+          };
 
-          const makeTrainMarker = (color) => ({
-            type: "simple-marker",
-            path: TRAIN_PATH,
-            color,
-            size: 17,
-            outline: { color: "#FFFFFF", width: 1 },
+          const LINE_SPACING = 3; // points between adjacent line centers
+
+          const makeLineSymbol = (lineNames) => {
+            if (lineNames.length === 1) {
+              return {
+                type: "simple-line",
+                color: LINE_COLORS[lineNames[0]],
+                width: 3,
+              };
+            }
+            const n = lineNames.length;
+            const totalSpan = (n - 1) * LINE_SPACING;
+            const symbolLayers = lineNames.map((name, i) => ({
+              type: "CIMSolidStroke",
+              width: 3,
+              color: LINE_RGBA[name],
+              effects: [{
+                type: "CIMGeometricEffectOffset",
+                offset: -totalSpan / 2 + i * LINE_SPACING,
+                method: "Rounded",
+                option: "Fast",
+              }],
+            }));
+            return {
+              type: "cim",
+              data: {
+                type: "CIMSymbolReference",
+                symbol: {
+                  type: "CIMLineSymbol",
+                  symbolLayers,
+                },
+              },
+            };
+          };
+
+          function hexToRgba(hex) {
+            return [parseInt(hex.slice(1, 3), 16), parseInt(hex.slice(3, 5), 16), parseInt(hex.slice(5, 7), 16), 255];
+          }
+
+          // CIM geometry rings stored as flat [x,y,x,y,...] arrays for compactness
+          const BODY_RINGS_FLAT = [
+            [555,768, 768,768, 768,597, 555,597, 555,597, 555,768],
+            [256,768, 469,768, 469,597, 256,597, 256,768],
+            [704,299, 679,304, 659,317, 645,338, 640,363, 645,387, 659,408, 679,422, 704,427, 729,422, 749,408, 763,387, 768,363, 763,338, 749,317, 729,304, 704,299],
+            [320,299, 295,304, 275,317, 261,338, 256,363, 261,387, 275,408, 295,422, 320,427, 345,422, 365,408, 379,387, 384,363, 379,338, 365,317, 345,304, 320,299],
+            [351,128, 436,213, 597,213, 683,128, 768,128, 768,149, 704,213, 733,216, 761,225, 787,238, 810,257, 828,280, 842,306, 850,334, 853,363, 853,768, 848,811, 833,848, 808,877, 773,901, 727,918, 670,930, 600,937, 512,939, 512,939, 427,936, 358,929, 300,917, 254,899, 217,875, 191,846, 176,810, 171,768, 171,363, 174,334, 182,306, 196,280, 214,257, 237,238, 263,225, 291,216, 320,213, 256,149, 256,128, 351,128],
+          ];
+          const ARROW_RINGS_FLAT = [
+            [160,120, 283,1, 320,37, 320,37, 283,73, 283,73, 160,193, 37,73, 37,73, 0,37, 37,1, 160,120],
+          ];
+          const toRings = (flat) => flat.map(r => {
+            const pts = [];
+            for (let i = 0; i < r.length; i += 2) pts.push([r[i], r[i + 1]]);
+            return pts;
+          });
+          const BODY_RINGS = toRings(BODY_RINGS_FLAT);
+          const ARROW_RINGS = toRings(ARROW_RINGS_FLAT);
+
+          const makeClipRect = (w, h) => ({
+            type: "CIMClippingPath", clippingType: "Intersect",
+            path: { rings: [[[0,0],[w,0],[w,h],[0,h],[0,0]]] },
           });
 
-          const makeTrainArrowMarker = (color) => ({
-            type: "simple-marker",
-            path: TRAIN_ARROW_PATH,
-            size: 10,
-            yoffset: 13,
-            outline: { color: "#FFFFFF", width: 1 },
-          })
+          const makeMarkerLayer = (size, frame, rings, symbol, extras = {}) => ({
+            type: "CIMVectorMarker", enable: true, anchorPointUnits: "Relative",
+            dominantSizeAxis3D: "Z", billboardMode3D: "FaceNearPlane",
+            size, frame, scaleSymbolsProportionally: true, respectFrame: true,
+            clippingPath: makeClipRect(frame.xmax, frame.ymax),
+            markerGraphics: [{ type: "CIMMarkerGraphic", geometry: { rings }, symbol }],
+            ...extras,
+          });
+
+          const makeCIMTrainSymbol = (hex) => {
+            const rgba = hexToRgba(hex);
+            const polySymbol = (strokeW) => ({
+              type: "CIMPolygonSymbol",
+              symbolLayers: [
+                { type: "CIMSolidStroke", enable: true, color: [255,255,255,255], width: strokeW },
+                { type: "CIMSolidFill", enable: true, color: rgba },
+              ],
+            });
+            return {
+              type: "cim",
+              data: {
+                type: "CIMSymbolReference",
+                symbol: {
+                  type: "CIMPointSymbol",
+                  symbolLayers: [
+                    makeMarkerLayer(20, { xmin: 0, ymin: 0, xmax: 1024, ymax: 1024 }, BODY_RINGS, polySymbol(40)),
+                    makeMarkerLayer(7, { xmin: 0, ymin: 0, xmax: 320, ymax: 193 }, ARROW_RINGS, polySymbol(30), {
+                      anchorPoint: { x: 0, y: -2 }, primitiveName: "arrow",
+                    }),
+                  ],
+                },
+                primitiveOverrides: [{
+                  type: "CIMPrimitiveOverride", primitiveName: "arrow", propertyName: "Rotation",
+                  valueExpressionInfo: { type: "CIMExpressionInfo", expression: "-$feature.Heading", returnType: "Default" },
+                }],
+              },
+            };
+          };
 
           const linesLayer = new GraphicsLayer();
           const busRouteLayer = new GraphicsLayer();
@@ -166,19 +365,23 @@
               { name: "ObjectID", type: "oid" },
               { name: "VehicleID", type: "string" },
               { name: "RouteID", type: "string" },
+              { name: "RouteName", type: "string" },
+              { name: "LineDescription", type: "string" },
               { name: "DirectionText", type: "string" },
               { name: "TripHeadsign", type: "string" },
               { name: "Deviation", type: "double" },
               { name: "DateTime", type: "string" },
             ],
             popupTemplate: {
-              title: "Bus {VehicleID}",
+              title: "Bus {RouteID} — {RouteName}",
               content: [
                 {
                   type: "fields",
                   fieldInfos: [
                     { fieldName: "VehicleID", label: "Vehicle ID" },
                     { fieldName: "RouteID", label: "Route" },
+                    { fieldName: "RouteName", label: "Route Name" },
+                    { fieldName: "LineDescription", label: "Line" },
                     { fieldName: "DirectionText", label: "Direction" },
                     { fieldName: "TripHeadsign", label: "Headsign" },
                     {
@@ -195,8 +398,9 @@
               symbol: {
                 type: "simple-marker",
                 color: "#4fc3f7",
-                size: 5,
-                outline: { color: "#FFFFFF", width: 0.5 },
+                path: "M18,11H6V6H18M16.5,17A1.5,1.5 0 0,1 15,15.5A1.5,1.5 0 0,1 16.5,14A1.5,1.5 0 0,1 18,15.5A1.5,1.5 0 0,1 16.5,17M7.5,17A1.5,1.5 0 0,1 6,15.5A1.5,1.5 0 0,1 7.5,14A1.5,1.5 0 0,1 9,15.5A1.5,1.5 0 0,1 7.5,17M4,16C4,16.88 4.39,17.67 5,18.22V20A1,1 0 0,0 6,21H7A1,1 0 0,0 8,20V19H16V20A1,1 0 0,0 17,21H18A1,1 0 0,0 19,20V18.22C19.61,17.67 20,16.88 20,16V6C20,2.5 16.42,2 12,2C7.58,2 4,2.5 4,6V16Z",
+                size: 14,
+                outline: { color: "#FFFFFF", width: 1 },
               },
             },
           });
@@ -253,53 +457,15 @@
             renderer: {
               type: "unique-value",
               field: "LineCode",
-              defaultSymbol: makeTrainMarker("#000000"),
+              defaultSymbol: makeCIMTrainSymbol("#000000"),
               uniqueValueInfos: [
-                { value: "RD", symbol: makeTrainMarker("#E51636") },
-                { value: "BL", symbol: makeTrainMarker("#0795D3") },
-                { value: "GR", symbol: makeTrainMarker("#00B140") },
-                { value: "OR", symbol: makeTrainMarker("#ED8B00") },
-                { value: "SV", symbol: makeTrainMarker("#A2A4A1") },
-                { value: "YL", symbol: makeTrainMarker("#FFD100") },
+                { value: "RD", symbol: makeCIMTrainSymbol("#E51636") },
+                { value: "BL", symbol: makeCIMTrainSymbol("#0795D3") },
+                { value: "GR", symbol: makeCIMTrainSymbol("#00B140") },
+                { value: "OR", symbol: makeCIMTrainSymbol("#ED8B00") },
+                { value: "SV", symbol: makeCIMTrainSymbol("#A2A4A1") },
+                { value: "YL", symbol: makeCIMTrainSymbol("#FFD100") },
               ]
-            },
-          });
-
-          const trainArrowLayer = new FeatureLayer({
-            source: [],
-            objectIdField: "ObjectID",
-            geometryType: "point",
-            spatialReference: { wkid: 4326 },
-            fields: [
-              { name: "ObjectID", type: "oid" },
-              { name: "TrainId", type: "string" },
-              { name: "TrainNumber", type: "string" },
-              { name: "CarCount", type: "integer" },
-              { name: "DirectionNum", type: "integer" },
-              { name: "CircuitId", type: "integer" },
-              { name: "DestinationStationCode", type: "string" },
-              { name: "LineCode", type: "string" },
-              { name: "SecondsAtLocation", type: "integer" },
-              { name: "ServiceType", type: "string" },
-              { name: "Heading", type: "double" },
-            ],
-            renderer: {
-              type: "unique-value",
-              field: "LineCode",
-              defaultSymbol: makeTrainArrowMarker("#000000"),
-              uniqueValueInfos: [
-                { value: "RD", symbol: makeTrainArrowMarker("#E51636") },
-                { value: "BL", symbol: makeTrainArrowMarker("#0795D3") },
-                { value: "GR", symbol: makeTrainArrowMarker("#00B140") },
-                { value: "OR", symbol: makeTrainArrowMarker("#ED8B00") },
-                { value: "SV", symbol: makeTrainArrowMarker("#A2A4A1") },
-                { value: "YL", symbol: makeTrainArrowMarker("#FFD100") },
-              ],
-              visualVariables: [{
-                type: "rotation",
-                field: "Heading",
-                rotationType: "geographic",
-              }],
             },
           });
 
@@ -307,6 +473,7 @@
             source: [],
             geometryType: "point",
             objectIdField: "ObjectID",
+            spatialReference: { wkid: 4326 },
             fields: [
               { name: "ObjectID", type: "oid" },
               { name: "Name", type: "string" },
@@ -319,26 +486,14 @@
             ],
             popupTemplate: {
               title: "{Name}",
-              content: [
-                {
-                  type: "fields",
-                  fieldInfos: [
-                    { fieldName: "Code", label: "Station Code" },
-                    { fieldName: "LineCode1", label: "Line 1" },
-                    { fieldName: "LineCode2", label: "Line 2" },
-                    { fieldName: "LineCode3", label: "Line 3" },
-                    { fieldName: "LineCode4", label: "Line 4" },
-                    { fieldName: "Address", label: "Address" },
-                  ],
-                },
-              ],
+              content: "{Address}",
             },
             renderer: {
               type: "simple",
               symbol: {
                 type: "simple-marker",
                 color: "#FFFFFF",
-                size: 10,
+                size: 12,
                 outline: { color: "#000000", width: 1 },
               },
             },
@@ -356,38 +511,92 @@
             }],
           });
 
-          const map = new Map({
-            basemap: "dark-gray-vector",
-            layers: [linesLayer],
+          const entrancesLayer = new FeatureLayer({
+            source: [],
+            objectIdField: "ObjectID",
+            geometryType: "point",
+            spatialReference: { wkid: 4326 },
+            popupEnabled: false,
+            fields: [
+              { name: "ObjectID", type: "oid" },
+              { name: "Name", type: "string" },
+              { name: "Description", type: "string" },
+            ],
+            renderer: {
+              type: "simple",
+              symbol: {
+                type: "simple-marker",
+                color: "#81D4FA",
+                size: 7,
+                outline: { color: "transparent", width: 0 },
+              },
+            },
+            labelingInfo: [{
+              labelExpressionInfo: {
+                expression: '$feature.Name + TextFormatting.NewLine + $feature.Description',
+              },
+              symbol: {
+                backgroundColor: [0, 0, 0, .4],
+                type: "text",
+                color: "#FFFFFF",
+                haloColor: "#000000",
+                haloSize: 1,
+                font: { size: 9 },
+              },
+              labelPlacement: "above-right",
+            }],
           });
 
-          const view = new MapView({
-            container: "viewDiv",
-            map,
-            center: [-77.04, 38.9],
-            zoom: 12,
-            popup: {
-             dockEnabled: true,
-             dockOptions: {
-               position: "bottom-left",
-               breakpoint: false
-             }
-            }
+          const busStopsLayer = new FeatureLayer({
+            source: [],
+            objectIdField: "ObjectID",
+            geometryType: "point",
+            spatialReference: { wkid: 4326 },
+            popupEnabled: false,
+            fields: [
+              { name: "ObjectID", type: "oid" },
+              { name: "StopID", type: "string" },
+              { name: "Name", type: "string" },
+            ],
+            renderer: {
+              type: "simple",
+              symbol: {
+                type: "simple-marker",
+                color: "#4fc3f7",
+                size: 7,
+                outline: { color: "transparent", width: 0 },
+              },
+            },
+            labelingInfo: [{
+              labelExpressionInfo: { expression: "$feature.Name" },
+              symbol: {
+                backgroundColor: [0, 0, 0, .4],
+                type: "text",
+                color: "#FFFFFF",
+                haloColor: "#000000",
+                haloSize: 1,
+                font: { size: 9 },
+              },
+              labelPlacement: "above-right",
+            }],
           });
+
+          const mapEl = document.getElementById("viewDiv");
+          const viewReady = mapEl.viewOnReady();
+          let view, map;
 
           // Load metro lines from GeoJSON
-          fetch("/data/Metro_Lines_Regional.geojson")
+          fetch("/data/metro_lines_processed.geojson")
             .then((res) => res.json())
             .then((geojson) => {
               for (const feature of geojson.features) {
-                const name = feature.properties.NAME;
-                const color = LINE_COLORS[name] || "#FFFFFF";
+                const lines = feature.properties.lines;
                 const coords = feature.geometry.coordinates;
 
                 linesLayer.add(
                   new Graphic({
                     geometry: { type: "polyline", paths: [coords] },
-                    symbol: { type: "simple-line", color, width: 3 },
+                    symbol: makeLineSymbol(lines),
                   }),
                 );
               }
@@ -397,6 +606,9 @@
             );
 
           // Load stations
+          const stationsByCode = {};
+          const stationSearchEl = document.getElementById("stationSearch");
+
           fetch("/api/stations")
             .then((res) => res.json())
             .then((stations) => {
@@ -424,19 +636,20 @@
 
               stationsLayer.applyEdits({ addFeatures: features });
 
-              map.add(stationsLayer);
-              map.add(busRouteLayer);
-              map.add(busesLayer);
-              map.add(trainsLayer);
-              map.add(trainArrowLayer);
+              // Populate combobox and lookup map
+              const seen = new Set();
+              const sorted = [...stations].sort((a, b) => a.Name.localeCompare(b.Name));
+              for (const s of sorted) {
+                stationsByCode[s.Code] = s;
+                if (seen.has(s.Name)) continue;
+                seen.add(s.Name);
+                const item = document.createElement("calcite-combobox-item");
+                item.value = s.Code;
+                item.heading = s.Name;
+                stationSearchEl.appendChild(item);
+              }
             })
-            .catch((err) => {
-              console.error("Failed to load stations:", err);
-              map.add(busRouteLayer);
-              map.add(busesLayer);
-              map.add(trainsLayer);
-              map.add(trainArrowLayer);
-            });
+            .catch((err) => console.error("Failed to load stations:", err));
 
           // --- OID tracking ---
           let trainOids = {};
@@ -444,24 +657,41 @@
           let busOids = {};
           let busNextOid = 1;
 
+          let selectedStationCode = null;
+
           // --- WebSocket helpers ---
           const wsProtocol = location.protocol === "https:"
             ? "wss:"
             : "ws:";
           let trainWs = null;
           let busWs = null;
+          let trainReconnectTimer = null;
+          let trainReconnectDelay = 1000;
+          let busReconnectTimer = null;
+          let busReconnectDelay = 1000;
+          const MAX_RECONNECT_DELAY = 30000;
 
           const trainStatusEl = document.getElementById("trainStatus");
           const busStatusEl = document.getElementById("busStatus");
-          const trainToggleEl = document.getElementById("trainToggle");
-          const busToggleEl = document.getElementById("busToggle");
+          const trainsCheckEl = document.querySelector(".trains-check");
+          const busesCheckEl = document.querySelector(".buses-check");
           const trainCountEl = document.getElementById("trainCount");
           const busCountEl = document.getElementById("busCount");
+
+          const trainLoaderEl = document.getElementById("trainLoader");
+          const busLoaderEl = document.getElementById("busLoader");
+          const loaderTimers = new WeakMap();
+          function flashLoader(el) {
+            el.classList.add("active");
+            clearTimeout(loaderTimers.get(el));
+            loaderTimers.set(el, setTimeout(() => el.classList.remove("active"), 1000));
+          }
 
           const setStatus = (el, state) => {
             const labels = {
               live: "live",
               connecting: "connecting...",
+              reconnecting: "reconnecting...",
               off: "off",
               disconnected: "disconnected",
             };
@@ -479,21 +709,25 @@
             if (trainWs) return;
             linesLayer.visible = true;
             stationsLayer.visible = true;
+            entrancesLayer.visible = true;
             setStatus(trainStatusEl, "connecting");
             trainWs = new WebSocket(
               `${wsProtocol}//${location.host}/ws/trains`,
             );
 
             trainWs.onopen = () => {
+              trainReconnectDelay = 1000;
               setStatus(trainStatusEl, "live");
             };
 
             trainWs.onmessage = (event) => {
-              const trains = JSON.parse(event.data);
+              flashLoader(trainLoaderEl);
+              const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
               const updateFeatures = [];
+              const deleteFeatures = [];
 
-              for (const train of trains) {
+              for (const train of updates) {
                 const graphic = new Graphic({
                   geometry: {
                     type: "point",
@@ -527,20 +761,32 @@
                 }
               }
 
+              for (const id of removals) {
+                if (trainOids[id] !== undefined) {
+                  deleteFeatures.push({ objectId: trainOids[id] });
+                  delete trainOids[id];
+                }
+              }
+
               const edits = {};
               if (addFeatures.length) edits.addFeatures = addFeatures;
-              if (updateFeatures.length) {
-                edits.updateFeatures = updateFeatures;
+              if (updateFeatures.length) edits.updateFeatures = updateFeatures;
+              if (deleteFeatures.length) edits.deleteFeatures = deleteFeatures;
+              if (addFeatures.length || deleteFeatures.length || updateFeatures.length) {
+                trainsLayer.applyEdits(edits);
               }
-              trainsLayer.applyEdits(edits);
-              trainArrowLayer.applyEdits(edits);
               updateCount(trainCountEl, trainOids);
             };
 
             trainWs.onclose = () => {
               trainWs = null;
-              if (trainToggleEl.checked) {
-                setStatus(trainStatusEl, "disconnected");
+              if (trainsCheckEl.checked) {
+                setStatus(trainStatusEl, "reconnecting");
+                trainReconnectTimer = setTimeout(() => {
+                  trainReconnectTimer = null;
+                  connectTrains();
+                }, trainReconnectDelay);
+                trainReconnectDelay = Math.min(trainReconnectDelay * 2, MAX_RECONNECT_DELAY);
               }
             };
 
@@ -550,8 +796,14 @@
           };
 
           const disconnectTrains = () => {
+            if (trainReconnectTimer) {
+              clearTimeout(trainReconnectTimer);
+              trainReconnectTimer = null;
+            }
+            trainReconnectDelay = 1000;
             stationsLayer.visible = false;
             linesLayer.visible = false;
+            entrancesLayer.visible = false;
             if (trainWs) {
               trainWs.onclose = null;
               trainWs.close();
@@ -560,14 +812,6 @@
             trainsLayer.queryFeatures().then((result) => {
               if (result.features.length > 0) {
                 trainsLayer.applyEdits({
-                  deleteFeatures: result.features,
-                });
-              }
-            });
-
-            trainArrowLayer.queryFeatures().then((result) => {
-              if (result.features.length > 0) {
-                trainArrowLayer.applyEdits({
                   deleteFeatures: result.features,
                 });
               }
@@ -588,15 +832,19 @@
             );
 
             busWs.onopen = () => {
+              busReconnectDelay = 1000;
               setStatus(busStatusEl, "live");
             };
 
             busWs.onmessage = (event) => {
-              const buses = JSON.parse(event.data);
+              flashLoader(busLoaderEl);
+              const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
               const updateFeatures = [];
+              const deleteFeatures = [];
 
-              for (const bus of buses) {
+              for (const bus of updates) {
+                const route = busRoutesByID[bus.RouteID];
                 const graphic = new Graphic({
                   geometry: {
                     type: "point",
@@ -606,6 +854,8 @@
                   attributes: {
                     VehicleID: bus.VehicleID,
                     RouteID: bus.RouteID,
+                    RouteName: route?.Name || "",
+                    LineDescription: route?.LineDescription || "",
                     DirectionText: bus.DirectionText || "",
                     TripHeadsign: bus.TripHeadsign || "",
                     Deviation: bus.Deviation,
@@ -624,19 +874,32 @@
                 }
               }
 
+              for (const id of removals) {
+                if (busOids[id] !== undefined) {
+                  deleteFeatures.push({ objectId: busOids[id] });
+                  delete busOids[id];
+                }
+              }
+
               const edits = {};
               if (addFeatures.length) edits.addFeatures = addFeatures;
-              if (updateFeatures.length) {
-                edits.updateFeatures = updateFeatures;
+              if (updateFeatures.length) edits.updateFeatures = updateFeatures;
+              if (deleteFeatures.length) edits.deleteFeatures = deleteFeatures;
+              if (addFeatures.length || updateFeatures.length || deleteFeatures.length) {
+                busesLayer.applyEdits(edits);
               }
-              busesLayer.applyEdits(edits);
               updateCount(busCountEl, busOids);
             };
 
             busWs.onclose = () => {
               busWs = null;
-              if (busToggleEl.checked) {
-                setStatus(busStatusEl, "disconnected");
+              if (busesCheckEl.checked) {
+                setStatus(busStatusEl, "reconnecting");
+                busReconnectTimer = setTimeout(() => {
+                  busReconnectTimer = null;
+                  connectBuses();
+                }, busReconnectDelay);
+                busReconnectDelay = Math.min(busReconnectDelay * 2, MAX_RECONNECT_DELAY);
               }
             };
 
@@ -646,6 +909,11 @@
           };
 
           const disconnectBuses = () => {
+            if (busReconnectTimer) {
+              clearTimeout(busReconnectTimer);
+              busReconnectTimer = null;
+            }
+            busReconnectDelay = 1000;
             if (busWs) {
               busWs.onclose = null;
               busWs.close();
@@ -665,58 +933,511 @@
           };
 
           // --- Toggle handlers ---
-          trainToggleEl.addEventListener("change", function () {
-            if (this.checked) {
+          trainsCheckEl.addEventListener("calciteCheckboxChange", () => {
+            if (trainsCheckEl.checked) {
               trainsLayer.visible = true;
+              stationSearchEl.style.display = "";
               connectTrains();
             } else {
               trainsLayer.visible = false;
+              stationSearchEl.value = "";
+              stationSearchEl.style.display = "none";
+              cleanupStationSelection();
+              if (stationHighlight) {
+                stationHighlight.remove();
+                stationHighlight = null;
+              }
               disconnectTrains();
             }
           });
 
-          busToggleEl.addEventListener("change", function () {
-            if (this.checked) {
+          busesCheckEl.addEventListener("calciteCheckboxChange", () => {
+            if (busesCheckEl.checked) {
               busesLayer.visible = true;
+              busRouteSearchEl.style.display = "";
               connectBuses();
             } else {
               busesLayer.visible = false;
+              busRouteSearchEl.value = "";
+              busRouteSearchEl.style.display = "none";
+              busesLayer.definitionExpression = "1=1";
+              clearBusRouteSelection();
               disconnectBuses();
             }
           });
 
-          // Add toggle panel to the UI
-          view.ui.add(togglePanel, "top-right");
+          // --- Bus route filter ---
+          const busRouteSearchEl = document.getElementById("busRouteSearch");
+          const busRoutesByID = {};
 
-          // --- Bus route display on popup ---
+          fetch("/api/bus-routes")
+            .then((res) => res.json())
+            .then((routes) => {
+              for (const r of routes) {
+                busRoutesByID[r.RouteID] = r;
+              }
+              const sorted = [...routes].sort((a, b) => a.RouteID.localeCompare(b.RouteID));
+              for (const r of sorted) {
+                const item = document.createElement("calcite-combobox-item");
+                item.value = r.RouteID;
+                item.heading = r.RouteID;
+                item.description = r.Name;
+                busRouteSearchEl.appendChild(item);
+              }
+            })
+            .catch((err) => console.error("Failed to load bus routes:", err));
 
-          // reactiveUtils.watch(() => view.popup?.selectedFeature, (feature) => {
-          //   busRouteLayer.removeAll();
-          //   if (!feature) return;
-          //   const attrs = feature.attributes;
-          //   if (attrs.RouteID === undefined || attrs.DirectionText === undefined) return;
+          const busRouteDetailsEl = document.getElementById("busRouteDetails");
+          const busStopsToggle = document.getElementById("busStopsToggle");
 
-          //   fetch(`/api/bus-route?routeId=${encodeURIComponent(attrs.RouteID)}&directionText=${encodeURIComponent(attrs.DirectionText)}`)
-          //     .then((res) => res.json())
-          //     .then((shape) => {
-          //       if (!shape.length) return;
-          //       const path = shape.map((pt) => [pt.Lon, pt.Lat]);
-          //       busRouteLayer.add(new Graphic({
-          //         geometry: { type: "polyline", paths: [path] },
-          //         symbol: { type: "simple-line", color: "#4fc3f7", width: 3, style: "solid" }
-          //       }));
-          //     })
-          //     .catch((err) => console.error("Failed to load bus route:", err));
-          // });
+          const clearBusStops = () => {
+            busStopsLayer.queryFeatures().then((result) => {
+              if (result.features.length > 0) {
+                busStopsLayer.applyEdits({ deleteFeatures: result.features });
+              }
+            }).catch(() => {});
+          };
 
-          // reactiveUtils.watch(() => view.popup?.visible, (visible) => {
-          //   if (view.popup && !visible) busRouteLayer.removeAll();
-          // });
+          const clearBusRouteSelection = () => {
+            clearBusStops();
+            busStopsToggle.checked = false;
+            busRouteDetailsEl.style.display = "none";
+          };
 
-          // --- Initial connection: trains only ---
+          const zoomToFilteredBuses = async () => {
+            const routeId = busRouteSearchEl.value;
+            if (!routeId) return;
+            const layerView = await view.whenLayerView(busesLayer);
+            await reactiveUtils.whenOnce(() => !layerView.updating);
+            const result = await busesLayer.queryFeatures({
+              where: `RouteID = '${routeId}'`,
+              returnGeometry: true,
+            });
+            if (result.features.length > 0) {
+              view.goTo(result.features, { duration: 500 });
+            }
+          };
+
+          busRouteSearchEl.addEventListener("calciteComboboxChange", () => {
+            clearBusRouteSelection();
+            const routeId = busRouteSearchEl.value;
+            if (!routeId) {
+              busesLayer.definitionExpression = "1=1";
+              return;
+            }
+            busRouteDetailsEl.style.display = "";
+            busesLayer.definitionExpression = `RouteID = '${routeId}'`;
+            zoomToFilteredBuses();
+          });
+
+          // Bus stops toggle
+          busStopsToggle.addEventListener("calciteSwitchChange", () => {
+            if (!busStopsToggle.checked) {
+              clearBusStops();
+              return;
+            }
+            const routeId = busRouteSearchEl.value;
+            if (!routeId) return;
+            fetch(`/api/bus-stops?routeId=${encodeURIComponent(routeId)}`)
+              .then((res) => res.json())
+              .then((stops) => {
+                if (stops.length === 0) return;
+                const features = stops.map((s) =>
+                  new Graphic({
+                    geometry: {
+                      type: "point",
+                      longitude: s.Lon,
+                      latitude: s.Lat,
+                    },
+                    attributes: {
+                      StopID: s.StopID,
+                      Name: s.Name,
+                    },
+                  })
+                );
+                busStopsLayer.applyEdits({ addFeatures: features });
+              })
+              .catch((err) => console.error("Failed to load bus stops:", err));
+          });
+
+          // Go to filtered buses
+          document.getElementById("gotoBusRoute").addEventListener("click", () => {
+            if (!busRouteSearchEl.value) return;
+            zoomToFilteredBuses();
+          });
+
+          // --- Bottom sheet drag logic ---
+          const sheetEl = document.querySelector(".panel-holder");
+          const handleEl = document.querySelector(".sheet-handle");
+          let sheetCleanup = null;
+          let currentSnap = "min";
+          const SNAP_ORDER = ["peek", "min", "mid", "max", "full"];
+
+          function cssVarPx(name) {
+            const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+            if (val.endsWith("vh")) return window.innerHeight * parseFloat(val) / 100;
+            return parseFloat(val);
+          }
+
+          function sheetSnaps() {
+            return {
+              peek: cssVarPx("--sheet-peek"),
+              min: cssVarPx("--sheet-min"),
+              mid: cssVarPx("--sheet-mid"),
+              max: cssVarPx("--sheet-max"),
+              full: cssVarPx("--sheet-full"),
+            };
+          }
+
+          function setSheetHeight(px, animate = false) {
+            sheetEl.style.transition = animate ? "height 200ms ease-out" : "";
+            sheetEl.style.height = `${px}px`;
+          }
+
+          function snapSheet(target, animate = true) {
+            const snaps = sheetSnaps();
+            currentSnap = target;
+            setSheetHeight(snaps[target], animate);
+          }
+
+          function makeSheetDraggable() {
+            // Clean up previous listeners if any
+            if (sheetCleanup) sheetCleanup();
+
+            let startY = 0;
+            let startH = 0;
+            let dragging = false;
+            let lastY = 0;
+            let lastTime = 0;
+            let velocity = 0;
+
+            function onDown(e) {
+              dragging = true;
+              handleEl.setPointerCapture(e.pointerId);
+              startY = e.clientY;
+              startH = sheetEl.getBoundingClientRect().height;
+              lastY = e.clientY;
+              lastTime = Date.now();
+              velocity = 0;
+              sheetEl.style.transition = "";
+              handleEl.style.cursor = "grabbing";
+            }
+
+            function onMove(e) {
+              if (!dragging) return;
+              const now = Date.now();
+              const dt = now - lastTime;
+              if (dt > 0) velocity = (lastY - e.clientY) / dt; // px/ms, positive = up
+              lastY = e.clientY;
+              lastTime = now;
+
+              const snaps = sheetSnaps();
+              const dy = startY - e.clientY;
+              const next = Math.max(snaps.peek, Math.min(snaps.full, startH + dy));
+              setSheetHeight(next);
+            }
+
+            function onUp() {
+              if (!dragging) return;
+              dragging = false;
+              handleEl.style.cursor = "grab";
+
+              const h = sheetEl.getBoundingClientRect().height;
+              const snaps = sheetSnaps();
+              const FLICK = 0.4; // px/ms threshold
+
+              let target;
+              if (velocity > FLICK) {
+                // Flick up: go to next snap above current height
+                target = SNAP_ORDER.find(s => snaps[s] > h + 10) || "full";
+              } else if (velocity < -FLICK) {
+                // Flick down: go to next snap below current height
+                target = [...SNAP_ORDER].reverse().find(s => snaps[s] < h - 10) || "peek";
+              } else {
+                // No flick: snap to nearest
+                target = SNAP_ORDER.reduce((a, b) =>
+                  Math.abs(snaps[a] - h) <= Math.abs(snaps[b] - h) ? a : b
+                );
+              }
+
+              snapSheet(target);
+            }
+
+            handleEl.addEventListener("pointerdown", onDown);
+            window.addEventListener("pointermove", onMove);
+            window.addEventListener("pointerup", onUp);
+            window.addEventListener("pointercancel", onUp);
+
+            sheetCleanup = () => {
+              handleEl.removeEventListener("pointerdown", onDown);
+              window.removeEventListener("pointermove", onMove);
+              window.removeEventListener("pointerup", onUp);
+              window.removeEventListener("pointercancel", onUp);
+              sheetCleanup = null;
+            };
+
+            snapSheet("min", false);
+          }
+
+          /** Expand sheet to at least mid if currently below mid. */
+          function sheetExpandIfNeeded() {
+            if (!smallScreenQuery.matches) return;
+            if (currentSnap === "peek" || currentSnap === "min") snapSheet("mid");
+          }
+
+          const smallScreenQuery = window.matchMedia("(max-width: 768px)");
+
+          function handleSmallScreen(e) {
+            if (e.matches) {
+              makeSheetDraggable();
+            } else {
+              if (sheetCleanup) sheetCleanup();
+              sheetEl.style.height = "auto";
+              sheetEl.style.transition = "";
+            }
+          }
+
+          // --- Station click: entrances & arrivals ---
+          const stationDetails = document.getElementById("stationDetails");
+          const arrivalsList = document.getElementById("arrivalsList");
+
+          arrivalsList.addEventListener("calciteListChange", async () => {
+            const selected = arrivalsList.selectedItems;
+            if (selected.length === 0) return;
+            const arrival = selected[0]._arrival;
+            if (!arrival?.TrainId) return;
+
+            if (activeHighlight) {
+              activeHighlight.remove();
+              activeHighlight = null;
+            }
+
+            const result = await trainsLayer.queryFeatures({
+              where: `TrainId = '${arrival.TrainId}'`,
+              returnGeometry: true,
+            });
+            
+            if (result.features.length === 0) return;
+
+            const target = result.features[0];
+            view.goTo({ target: target.geometry, zoom: Math.max(view.zoom, 14) }, { duration: 400 });
+
+            const layerView = await view.whenLayerView(trainsLayer);
+            activeHighlight = layerView.highlight(target);
+            setTimeout(() => {
+              if (activeHighlight) {
+                activeHighlight.remove();
+                activeHighlight = null;
+              }
+            }, 2000);
+          });
+
+          let arrivalsWs = null;
+          let activeHighlight = null;
+          let stationHighlight = null;
+
+          const renderArrivals = (arrivals) => {
+            arrivalsList.innerHTML = "";
+            for (const a of arrivals) {
+              const color = LINE_COLORS[a.Line] || "#888";
+              const item = document.createElement("calcite-list-item");
+              item.label = `${a.Destination || "Unknown"}`;
+              const minuteDescription = a.Min === "" || a.Min === "—" || a.Min === "ARR" || a.Min === "BRD" ? a.Min : `${a.Min} min`;
+              item.description = `${a.Car || "?"} cars · ${minuteDescription}`;
+              item.innerHTML = `<span slot="content-start" class="arrival-line" style="background:${color}"></span>`;
+              item._arrival = a;
+              arrivalsList.appendChild(item);
+            }
+            if (arrivals.length === 0) {
+              const item = document.createElement("calcite-list-item");
+              item.label = "No upcoming arrivals";
+              arrivalsList.appendChild(item);
+            }
+          };
+
+          const entrancesToggle = document.getElementById("entrancesToggle");
+
+          const clearEntrances = () => {
+            entrancesLayer.queryFeatures().then(result => {
+              if (result.features.length > 0) {
+                entrancesLayer.applyEdits({ deleteFeatures: result.features });
+              }
+            });
+          };
+
+          const cleanupStationSelection = () => {
+            // Clear entrances and reset toggle
+            clearEntrances();
+            entrancesToggle.checked = false;
+            // Close arrivals WebSocket
+            if (arrivalsWs) {
+              arrivalsWs.onclose = null;
+              arrivalsWs.close();
+              arrivalsWs = null;
+            }
+            // Hide station details
+            stationDetails.style.display = "none";
+            arrivalsList.innerHTML = "";
+            selectedStationCode = null;
+
+            if (activeHighlight) {
+              activeHighlight.remove();
+              activeHighlight = null;
+            }
+          };
+
+          const showArrivals = (code) => {
+            selectedStationCode = code;
+            stationDetails.style.display = "";
+            arrivalsList.innerHTML = "";
+            sheetExpandIfNeeded();
+
+            arrivalsWs = new WebSocket(
+              `${wsProtocol}//${location.host}/ws/arrivals/${encodeURIComponent(code)}`
+            );
+            arrivalsWs.onmessage = (event) => {
+              flashLoader(trainLoaderEl);
+              if (selectedStationCode !== code) return;
+              const arrivals = JSON.parse(event.data);
+              renderArrivals(arrivals);
+            };
+            arrivalsWs.onerror = () => {
+              console.error("Arrivals WebSocket error");
+            };
+          };
+
+          // Station combobox search
+          stationSearchEl.addEventListener("calciteComboboxChange", () => {
+            if (stationHighlight) {
+              stationHighlight.remove();
+              stationHighlight = null;
+            }
+            const code = stationSearchEl.value;
+            cleanupStationSelection();
+            if (!code) return;
+            const station = stationsByCode[code];
+            if (!station) return;
+
+            // Zoom and highlight the station feature
+            stationsLayer.queryFeatures({ returnGeometry: true, where: `Code = '${code}'` }).then(async (result) => {
+              if (result.features.length === 0) return;
+              const feature = result.features[0];
+              view.goTo({ target: feature.geometry, zoom: 15 }, { duration: 500 });
+              const layerView = await view.whenLayerView(stationsLayer);
+              stationHighlight = layerView.highlight(feature);
+            });
+
+            showArrivals(code);
+          });
+
+          // Entrances toggle
+          entrancesToggle.addEventListener("calciteSwitchChange", () => {
+            if (!entrancesToggle.checked) {
+              clearEntrances();
+              return;
+            }
+            const station = stationsByCode[selectedStationCode];
+            if (!station) return;
+            const { Lat: latitude, Lon: longitude } = station;
+
+            fetch(`/api/entrances?lat=${latitude}&lon=${longitude}&radius=500`)
+              .then(res => res.json())
+              .then(entrances => {
+                if (entrances.length === 0) return;
+                const features = entrances.map(e =>
+                  new Graphic({
+                    geometry: {
+                      type: "point",
+                      longitude: e.Lon,
+                      latitude: e.Lat,
+                    },
+                    attributes: {
+                      Name: e.Name,
+                      Description: e.Description,
+                    },
+                  })
+                );
+                entrancesLayer.applyEdits({ addFeatures: features });
+                view.goTo(features);
+              })
+              .catch(err => console.error("Failed to load entrances:", err));
+          });
+
+          // Go to station button
+          document.getElementById("gotoStation").addEventListener("click", () => {
+            const station = stationsByCode[selectedStationCode];
+            if (!station) return;
+            view.goTo({ target: [station.Lon, station.Lat], zoom: 15 }, { duration: 500 });
+          });
+
+          // --- View-dependent initialization ---
+          async function initView() {
+            await viewReady;
+            view = mapEl.view;
+            map = mapEl.map;
+
+            map.add(linesLayer);
+            map.add(stationsLayer);
+            map.add(entrancesLayer);
+            map.add(busRouteLayer);
+            map.add(busStopsLayer);
+            map.add(busesLayer);
+            map.add(trainsLayer);
+
+            view.popup.visible = false;
+            view.popup.collapsed = true;
+            view.popup.dockEnabled = true;
+            view.popup.dockOptions = {
+              position: "bottom-right",
+              breakpoint: false,
+            };
+            view.constraints = {
+              minZoom: 8,
+              geometry: {
+                type: "extent",
+                spatialReference: { wkid: 102100 },
+                xmin: -8629219.7,
+                ymin: 4677858.1,
+                xmax: -8544476.9,
+                ymax: 4748981.5,
+              },
+            };
+
+            handleSmallScreen(smallScreenQuery);
+            smallScreenQuery.addEventListener("change", handleSmallScreen);
+
+            const aboutNotice = document.querySelector("#aboutNotice");
+            if (!localStorage.getItem("aboutDismissed")) {
+              aboutNotice.open = true;
+              aboutNotice.style.display = "block";
+            }
+            aboutNotice.addEventListener("calciteNoticeClose", () => {
+              localStorage.setItem("aboutDismissed", "1");
+            });
+
+            reactiveUtils.watch(() => view.popup?.selectedFeature, (feature) => {
+              cleanupStationSelection();
+              if (!feature) return;
+              const attrs = feature.attributes;
+              if (!attrs.Code) {
+                stationSearchEl.value = "";
+                return;
+              }
+              stationSearchEl.value = attrs.Code;
+              showArrivals(attrs.Code);
+            });
+
+            reactiveUtils.watch(() => view.popup?.visible, (visible) => {
+              if (!visible) {
+                cleanupStationSelection();
+                stationSearchEl.value = "";
+              }
+            });
+          }
+
+          // --- Initial connections ---
           connectTrains();
-        },
-      );
+          initView();
     </script>
   </body>
 </html>

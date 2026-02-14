@@ -125,7 +125,7 @@ export async function generateCircuitMap(): Promise<CircuitMap> {
   return circuitMap;
 }
 
-const CIRCUIT_MAP_PATH = "circuit-map.json";
+const CIRCUIT_MAP_PATH = "data/cache/circuit-map.json";
 
 /** Flatten the per-line circuit map into a single circuitId -> Point lookup. */
 function flattenCircuitMap(nested: CircuitMap): Record<number, Point> {
@@ -148,6 +148,7 @@ export async function loadCircuitMap(): Promise<Record<number, Point>> {
   } catch {
     console.log("Circuit map not found, generating...");
     nested = await generateCircuitMap();
+    await Deno.mkdir("data/cache", { recursive: true });
     await Deno.writeTextFile(CIRCUIT_MAP_PATH, JSON.stringify(nested, null, 2));
     console.log("Generated circuit map");
   }
@@ -162,7 +163,8 @@ if (import.meta.main) {
     (sum, lineMap) => sum + Object.keys(lineMap).length,
     0,
   );
-  await Deno.writeTextFile("circuit-map.json", JSON.stringify(map, null, 2));
+  await Deno.mkdir("data/cache", { recursive: true });
+  await Deno.writeTextFile(CIRCUIT_MAP_PATH, JSON.stringify(map, null, 2));
   console.log(
     `Generated circuit map: ${
       Object.keys(map).length

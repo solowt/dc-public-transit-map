@@ -1,7 +1,7 @@
 import type { BusPosition } from "./interfaces.d.ts";
 import { getBusPositions } from "./scripts/wmata-api.ts";
 
-const POLL_INTERVAL_MS = 10_000;
+const POLL_INTERVAL_MS = 15_000;
 
 let clients: Set<WebSocket>;
 
@@ -14,8 +14,8 @@ export function init(wsClients: Set<WebSocket>): void {
   clients = wsClients;
 }
 
-function broadcast(data: BusPosition[]) {
-  const message = JSON.stringify(data);
+function broadcast(updates: BusPosition[], removals: string[] = []) {
+  const message = JSON.stringify({ updates, removals });
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
       client.send(message);
@@ -39,16 +39,18 @@ async function pollBuses() {
 
     // Remove buses that are no longer reporting
     const activeIds = new Set(positions.map((b) => b.VehicleID));
+    const removedIds: string[] = [];
     for (const id of lastKnownPositions.keys()) {
       if (!activeIds.has(id)) {
         lastKnownPositions.delete(id);
+        removedIds.push(id);
       }
     }
 
     latestSnapshot = positions;
 
-    if (changedBuses.length > 0) {
-      broadcast(changedBuses);
+    if (changedBuses.length > 0 || removedIds.length > 0) {
+      broadcast(changedBuses, removedIds);
     }
   } catch (err) {
     console.error("Error polling buses:", err);
@@ -77,7 +79,7 @@ export function stopPolling(): void {
   lastKnownPositions.clear();
 }
 
-/** Return the latest full snapshot of all buses. */
-export function getLatestSnapshot(): BusPosition[] {
-  return latestSnapshot;
+/** Return the latest full snapshot of all buses (wrapped for protocol). */
+export function getLatestSnapshot(): { updates: BusPosition[]; removals: string[] } {
+  return { updates: latestSnapshot, removals: [] };
 }

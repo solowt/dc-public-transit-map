@@ -1,14 +1,16 @@
 {
   "tasks": {
     "dev": "APP_ENV=development deno run --watch -A main.ts",
-    "start": "APP_ENV=production deno run -A main.ts"
+    "start": "APP_ENV=production deno run -A main.ts",
+    "process-lines": "deno run --allow-read --allow-write scripts/process-lines.ts",
+    "clear-cache": "rm -rf data/cache && echo 'Cache cleared'"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1"
   },
   "deploy": {
     "org": "aquarium",
-    "app": "dc-metro-trains"
+    "app": "dc-transit-map"
   },
   "compilerOptions": {
     "lib": ["deno.ns", "deno.window", "dom"],

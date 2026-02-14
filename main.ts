@@ -1,7 +1,9 @@
 import { loadCircuitMap } from "./scripts/generate-map.ts";
-import { getRouteShape, getStations } from "./scripts/wmata-api.ts";
+import { getBusRoutes, getBusStops, getRouteShape, getStations, getEntrances } from "./scripts/wmata-api.ts";
+import { handleArrivalsSocket, init as initArrivals } from "./arrivals.ts";
 import {
   getLatestSnapshot as getTrainSnapshot,
+  getTrains,
   init as initTrains,
   startPolling as startTrainPolling,
   stopPolling as stopTrainPolling,
@@ -22,26 +24,35 @@ const busClients = new Set<WebSocket>();
 // Initialize modules (polling starts on first client connect)
 await initTrains(circuitMap, trainClients);
 initBuses(busClients);
+initArrivals(getTrains);
 
 function handleWebSocket(
   req: Request,
   clients: Set<WebSocket>,
-  getSnapshot: () => unknown[],
+  getSnapshot: () => { updates: unknown[]; removals: string[] },
   onStartPolling: () => void,
   onStopPolling: () => void,
 ): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
 
+  let pingInterval: number;
+
   socket.onopen = () => {
     clients.add(socket);
     if (clients.size === 1) onStartPolling();
     const snapshot = getSnapshot();
-    if (snapshot.length > 0) {
+    if (snapshot.updates.length > 0) {
       socket.send(JSON.stringify(snapshot));
     }
+    pingInterval = setInterval(() => {
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ updates: [], removals: [] }));
+      }
+    }, 30_000);
   };
 
   socket.onclose = () => {
+    clearInterval(pingInterval);
     clients.delete(socket);
     if (clients.size === 0) onStopPolling();
   };
@@ -87,11 +98,34 @@ Deno.serve({ port: 8080 }, async (req) => {
     if (wsUrl.pathname === "/ws/buses") {
       return handleWebSocket(req, busClients, getBusSnapshot, startBusPolling, stopBusPolling);
     }
+    const arrivalsMatch = wsUrl.pathname.match(/^\/ws\/arrivals\/([A-Za-z0-9]+)$/);
+    if (arrivalsMatch) {
+      return handleArrivalsSocket(req, arrivalsMatch[1]);
+    }
     return new Response("Not Found", { status: 404 });
   }
 
   const url = new URL(req.url);
   let pathname = url.pathname;
+
+  // API: entrances
+  if (pathname === "/api/entrances") {
+    const lat = url.searchParams.get("lat");
+    const lon = url.searchParams.get("lon");
+    const radius = url.searchParams.get("radius");
+    if (!lat || !lon || !radius) {
+      return new Response("Missing lat, lon, or radius", { status: 400 });
+    }
+    try {
+      const entrances = await getEntrances(Number(lat), Number(lon), Number(radius));
+      return new Response(JSON.stringify(entrances), {
+        headers: { "content-type": "application/json" },
+      });
+    } catch (err) {
+      console.error("Error fetching entrances:", err);
+      return new Response("Failed to fetch entrances", { status: 500 });
+    }
+  }
 
   // API: stations
   if (pathname === "/api/stations") {
@@ -103,6 +137,36 @@ Deno.serve({ port: 8080 }, async (req) => {
     } catch (err) {
       console.error("Error fetching stations:", err);
       return new Response("Failed to fetch stations", { status: 500 });
+    }
+  }
+
+  // API: bus routes
+  if (pathname === "/api/bus-routes") {
+    try {
+      const routes = await getBusRoutes();
+      return new Response(JSON.stringify(routes), {
+        headers: { "content-type": "application/json" },
+      });
+    } catch (err) {
+      console.error("Error fetching bus routes:", err);
+      return new Response("Failed to fetch bus routes", { status: 500 });
+    }
+  }
+
+  // API: bus stops (filtered by route)
+  if (pathname === "/api/bus-stops") {
+    const routeId = url.searchParams.get("routeId");
+    if (!routeId) {
+      return new Response("Missing routeId", { status: 400 });
+    }
+    try {
+      const stops = await getBusStops(routeId);
+      return new Response(JSON.stringify(stops), {
+        headers: { "content-type": "application/json" },
+      });
+    } catch (err) {
+      console.error("Error fetching bus stops:", err);
+      return new Response("Failed to fetch bus stops", { status: 500 });
     }
   }
 

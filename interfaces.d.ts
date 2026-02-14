@@ -48,6 +48,20 @@ export interface BusPosition {
   TripID: string;
 }
 
+export interface BusRoute {
+  RouteID: string;
+  Name: string;
+  LineDescription: string;
+}
+
+export interface BusStop {
+  StopID: string;
+  Name: string;
+  Lat: number;
+  Lon: number;
+  Routes: string[];
+}
+
 export interface Station {
   Code: string;
   Name: string;
