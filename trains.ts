@@ -7,9 +7,10 @@ const POLL_INTERVAL_MS = 5_000;
 let circuitMap: Record<number, Point>;
 let clients: Set<WebSocket>;
 
-// Circuit adjacency (both tracks are ordered in the same physical direction)
-const nextCircuit = new Map<number, number>();
-const prevCircuit = new Map<number, number>();
+// Circuit adjacency — maps support branching at junctions (one circuit can
+// lead to multiple next/prev circuits where lines diverge or merge).
+const nextCircuit = new Map<number, Set<number>>();
+const prevCircuit = new Map<number, Set<number>>();
 
 // Station code → set of circuit IDs where that station is located
 const stationCircuits = new Map<string, Set<number>>();
@@ -30,8 +31,12 @@ export async function init(
   for (const route of routes) {
     const circuits = route.TrackCircuits;
     for (let i = 0; i < circuits.length - 1; i++) {
-      nextCircuit.set(circuits[i].CircuitId, circuits[i + 1].CircuitId);
-      prevCircuit.set(circuits[i + 1].CircuitId, circuits[i].CircuitId);
+      const a = circuits[i].CircuitId;
+      const b = circuits[i + 1].CircuitId;
+      if (!nextCircuit.has(a)) nextCircuit.set(a, new Set());
+      nextCircuit.get(a)!.add(b);
+      if (!prevCircuit.has(b)) prevCircuit.set(b, new Set());
+      prevCircuit.get(b)!.add(a);
     }
     for (const tc of circuits) {
       if (tc.StationCode) {
@@ -68,14 +73,16 @@ function enrichTrain(train: TrainPosition): TrainData | null {
   const backward = train.DirectionNum === 1 ? prevCircuit : nextCircuit;
 
   let heading = 0;
-  const aheadId = forward.get(train.CircuitId);
-  if (aheadId !== undefined && circuitMap[aheadId]) {
-    heading = bearing(point, circuitMap[aheadId]);
+  const aheadIds = forward.get(train.CircuitId);
+  const firstAhead = aheadIds ? aheadIds.values().next().value : undefined;
+  if (firstAhead !== undefined && circuitMap[firstAhead]) {
+    heading = bearing(point, circuitMap[firstAhead]);
   } else {
     // End of line: use the circuit behind to infer heading
-    const behindId = backward.get(train.CircuitId);
-    if (behindId !== undefined && circuitMap[behindId]) {
-      heading = bearing(circuitMap[behindId], point);
+    const behindIds = backward.get(train.CircuitId);
+    const firstBehind = behindIds ? behindIds.values().next().value : undefined;
+    if (firstBehind !== undefined && circuitMap[firstBehind]) {
+      heading = bearing(circuitMap[firstBehind], point);
     }
   }
 
@@ -161,7 +168,8 @@ const MAX_CIRCUIT_HOPS = 500;
 
 /**
  * Count how many circuit hops it takes to walk forward from a train's circuit
- * to a station. Returns -1 if the station is not reachable (train has passed it).
+ * to a station. Uses BFS to handle branching junctions where lines diverge.
+ * Returns -1 if the station is not reachable (train has passed it).
  */
 export function circuitDistanceToStation(
   circuitId: number,
@@ -175,12 +183,24 @@ export function circuitDistanceToStation(
   // Dir 1 travels forward (next), Dir 2 travels backward (prev)
   const forward = directionNum === 1 ? nextCircuit : prevCircuit;
 
-  let current = circuitId;
+  const visited = new Set<number>([circuitId]);
+  let frontier = [circuitId];
+
   for (let hops = 1; hops <= MAX_CIRCUIT_HOPS; hops++) {
-    const next = forward.get(current);
-    if (next === undefined) break;
-    if (targetCircuits.has(next)) return hops;
-    current = next;
+    const nextFrontier: number[] = [];
+    for (const current of frontier) {
+      const neighbors = forward.get(current);
+      if (!neighbors) continue;
+      for (const next of neighbors) {
+        if (targetCircuits.has(next)) return hops;
+        if (!visited.has(next)) {
+          visited.add(next);
+          nextFrontier.push(next);
+        }
+      }
+    }
+    if (nextFrontier.length === 0) break;
+    frontier = nextFrontier;
   }
   return -1;
 }

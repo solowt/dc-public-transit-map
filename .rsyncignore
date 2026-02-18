@@ -1,7 +1,9 @@
+.git/
+.gitignore
 .api-key
-deno.d.ts
 CLAUDE.md
-/scripts/deploy.sh
+todos.md
+
 .claude/
 .claude-cache/
 .claude-history/

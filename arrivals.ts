@@ -6,6 +6,8 @@ const POLL_INTERVAL_MS = 10_000;
 
 // Station lookups (populated on first use)
 let nameToCode: Map<string, string> | null = null;
+// Transfer station paired codes: code → set of equivalent codes (including itself)
+let pairedCodes: Map<string, Set<string>> | null = null;
 
 // WMATA arrival predictions use abbreviated names that don't match the stations
 // API. This maps known abbreviations to the canonical station name.
@@ -22,6 +24,7 @@ async function ensureStationData() {
   if (nameToCode) return;
   const stations = await getStations();
   nameToCode = new Map();
+  pairedCodes = new Map();
   for (const s of stations) {
     nameToCode.set(s.Name, s.Code);
   }
@@ -29,6 +32,17 @@ async function ensureStationData() {
   for (const [alias, canonical] of Object.entries(DESTINATION_ALIASES)) {
     const code = nameToCode.get(canonical);
     if (code) nameToCode.set(alias, code);
+  }
+  // Build transfer station pairs (e.g. B01 <-> F01 for Gallery Place)
+  for (const s of stations) {
+    if (s.StationTogether1) {
+      const a = s.Code;
+      const b = s.StationTogether1;
+      if (!pairedCodes.has(a)) pairedCodes.set(a, new Set([a]));
+      if (!pairedCodes.has(b)) pairedCodes.set(b, new Set([b]));
+      pairedCodes.get(a)!.add(b);
+      pairedCodes.get(b)!.add(a);
+    }
   }
 }
 
@@ -86,11 +100,36 @@ interface ArrivalWithTrain {
   TrainId: string | null;
 }
 
+/** Get all equivalent codes for a station (itself + transfer partners). */
+function getEquivalentCodes(code: string): Set<string> {
+  return pairedCodes?.get(code) ?? new Set([code]);
+}
+
+/** Check if two station codes refer to the same physical station. */
+function isSameStation(a: string, b: string): boolean {
+  if (a === b) return true;
+  return getEquivalentCodes(a).has(b);
+}
+
+/** Sort key for the Min field: BRD < ARR < numeric minutes < unknown. */
+function arrivalMinKey(min: string): number {
+  if (min === "BRD") return -1;
+  if (min === "ARR") return 0;
+  const n = parseInt(min);
+  if (!isNaN(n)) return n;
+  return Infinity;
+}
+
+function arrivalSortCompare(a: ArrivalWithTrain, b: ArrivalWithTrain): number {
+  return arrivalMinKey(a.Min) - arrivalMinKey(b.Min);
+}
+
 function matchTrainIds(
   arrivals: ArrivalWithTrain[],
   stationCode: string,
 ): void {
   const trains = getTrainSnapshot();
+  const stationCodes = getEquivalentCodes(stationCode);
 
   // Track which TrainIds have already been assigned to avoid duplicates
   const usedTrainIds = new Set<string>();
@@ -102,19 +141,26 @@ function matchTrainIds(
     const candidates: { train: TrainData; hops: number }[] = [];
     for (const t of trains) {
       if (t.LineCode !== arrival.Line) continue;
-      if (t.DestinationStationCode !== destCode) continue;
+      if (destCode && !isSameStation(t.DestinationStationCode, destCode)) continue;
       if (arrival.Car !== "-" && arrival.Car !== "" &&
           t.CarCount !== parseInt(arrival.Car)) continue;
       if (usedTrainIds.has(t.TrainId)) continue;
 
-      const hops = circuitDistanceToStation(
-        t.CircuitId,
-        t.DirectionNum,
-        stationCode,
-      );
+      // Check circuit distance to any of the station's equivalent codes
+      let bestHops = -1;
+      for (const code of stationCodes) {
+        const hops = circuitDistanceToStation(
+          t.CircuitId,
+          t.DirectionNum,
+          code,
+        );
+        if (hops >= 0 && (bestHops < 0 || hops < bestHops)) {
+          bestHops = hops;
+        }
+      }
       // Only include trains that are approaching (station is ahead)
-      if (hops >= 0) {
-        candidates.push({ train: t, hops });
+      if (bestHops >= 0) {
+        candidates.push({ train: t, hops: bestHops });
       }
     }
 
@@ -137,7 +183,15 @@ async function poll(): Promise<void> {
 
   try {
     await ensureStationData();
-    const rawArrivals = await getTrainArrivals(codes.join(","));
+
+    // Expand to include all equivalent codes for transfer stations
+    const allCodes = new Set<string>();
+    for (const code of codes) {
+      for (const eq of getEquivalentCodes(code)) {
+        allCodes.add(eq);
+      }
+    }
+    const rawArrivals = await getTrainArrivals([...allCodes].join(","));
 
     // Group arrivals by LocationCode
     const byStation = new Map<string, ArrivalWithTrain[]>();
@@ -150,14 +204,16 @@ async function poll(): Promise<void> {
       list.push({ ...a, DestinationCode: resolveDestinationCode(a) ?? "", TrainId: null });
     }
 
-    // Match train IDs per station
-    for (const [code, arrivals] of byStation) {
-      matchTrainIds(arrivals, code);
-    }
-
-    // Send filtered results to each station's clients
+    // Send merged results to each station's clients
     for (const [code, clients] of stationClients) {
-      const stationArrivals = byStation.get(code) ?? [];
+      // Collect arrivals from all equivalent codes
+      const stationArrivals: ArrivalWithTrain[] = [];
+      for (const eq of getEquivalentCodes(code)) {
+        const eqArrivals = byStation.get(eq);
+        if (eqArrivals) stationArrivals.push(...eqArrivals);
+      }
+      stationArrivals.sort(arrivalSortCompare);
+      matchTrainIds(stationArrivals, code);
       const message = JSON.stringify(stationArrivals);
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
@@ -194,21 +250,39 @@ function stopPollingIfEmpty(): void {
 export function handleArrivalsSocket(
   req: Request,
   stationCode: string,
+  tokenExpiry?: number,
 ): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
 
+  let expiryTimeout: number | undefined;
+
   socket.onopen = async () => {
+    if (tokenExpiry !== undefined) {
+      const ms = tokenExpiry * 1000 - Date.now();
+      if (ms > 0) {
+        expiryTimeout = setTimeout(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close(4001, "Token expired");
+          }
+        }, ms);
+      } else {
+        socket.close(4001, "Token expired");
+        return;
+      }
+    }
     addClient(stationCode, socket);
 
     // Send initial arrivals immediately with train IDs
     try {
       await ensureStationData();
-      const rawArrivals = await getTrainArrivals(stationCode);
+      const allCodes = [...getEquivalentCodes(stationCode)];
+      const rawArrivals = await getTrainArrivals(allCodes.join(","));
       const arrivals: ArrivalWithTrain[] = rawArrivals.map((a) => ({
         ...a,
         DestinationCode: resolveDestinationCode(a) ?? "",
         TrainId: null,
       }));
+      arrivals.sort(arrivalSortCompare);
       matchTrainIds(arrivals, stationCode);
       if (socket.readyState === WebSocket.OPEN) {
         socket.send(JSON.stringify(arrivals));
@@ -221,6 +295,7 @@ export function handleArrivalsSocket(
   };
 
   socket.onclose = () => {
+    if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
     removeClient(stationCode, socket);
     stopPollingIfEmpty();
   };

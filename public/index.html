@@ -3,7 +3,8 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>WMATA Transit Map</title>
+    <title>DC Transit Map</title>
+    <link rel="icon" href="/favicon.svg?v=10" type="image/svg+xml">
     <link
       rel="stylesheet"
       href="https://js.arcgis.com/4.34/esri/themes/dark/main.css"
@@ -80,14 +81,6 @@
           z-index: 1;
         }
       }
-      .ws-loader {
-        opacity: 0;
-        transition: opacity 150ms ease;
-        margin-left: 4px;
-      }
-      .ws-loader.active {
-        opacity: 1;
-      }
       .layers-panel calcite-tabs {
         padding-bottom: 1rem;
       }
@@ -98,20 +91,35 @@
         padding: 1rem 1rem 1rem 1rem;
         --calcite-label-margin-bottom: 0;
       }
+      .status {
+        border-radius: 50%;
+        height: .75rem;
+        width: .75rem;
+      }
       .status.live {
+        background: #66bb6a;
         color: #66bb6a;
       }
       .status.connecting {
+        background: #ffa726;
         color: #ffa726;
       }
       .status.off {
+        background: #888;
         color: #888;
       }
       .status.disconnected {
+        background: #ef5350;
         color: #ef5350;
       }
       .status.reconnecting {
+        background: #ffa726;
         color: #ffa726;
+      }
+      .status.flashing {
+        filter: drop-shadow(0 0 6px currentColor)
+          drop-shadow(0 0 14px currentColor)
+          drop-shadow(0 0 28px rgba(0,255,255,.7));
       }
       .count {
         font-size: 12px;
@@ -132,7 +140,7 @@
         top: 30px;
         left: 15px;
         right: 15px;
-        z-index: 1;
+        z-index: 2;
       }
       .arrival-line {
         display: inline-block;
@@ -153,12 +161,16 @@
     </style>
   </head>
   <body class="calcite-mode-dark">
+    <div id="keyboard-dismiss"
+       tabindex="-1"
+       style="position:fixed; top:0; left:0; width:1px; height:1px; opacity:0;">
+    </div>
     <arcgis-map id="viewDiv" basemap="dark-gray-vector" center="-77.04,38.9" zoom="12">
-      <arcgis-track slot="bottom-left" go-to-location-disabled></arcgis-track>
+      <arcgis-locate slot="bottom-left"></arcgis-locate>
     </arcgis-map>
     <calcite-notice id="aboutNotice" closable icon="map" scale="l" width="auto">
       <span slot="title">WMATA Transit Map</span>
-      <span slot="message">Real-time train and bus positions via the WMATA API. Use the tools to toggle vehicles and search for stations. Click or search for a station to view arrivals and station entrancess. </span>
+      <span slot="message">Real-time train and bus positions via the WMATA API. Use the tools to toggle vehicles, search for stations and routes, and toggle entrances and bus stops.</span>
     </calcite-notice>
     <div class="panel-holder">
       <div class="sheet-handle"></div>
@@ -166,17 +178,16 @@
         <calcite-tabs scale="l">
           <calcite-tab-nav slot="title-group">
             <calcite-tab-title selected>Trains</calcite-tab-title>
-            <calcite-tab-title>Buses</calcite-tab-title>
+            <calcite-tab-title class="bus-tab-title">Buses</calcite-tab-title>
           </calcite-tab-nav>
           <calcite-tab selected>
             <div class="layer-tab-content">
               <calcite-label layout="inline">
-                <calcite-checkbox class="trains-check" checked></calcite-checkbox>
+                <calcite-checkbox class="trains-check"></calcite-checkbox>
                 Show trains
               </calcite-label>
               <span id="trainCount" class="count"></span>
-              <span id="trainStatus" class="status connecting">connecting...</span>
-              <calcite-loader class="ws-loader" id="trainLoader" type="indeterminate" scale="s" inline></calcite-loader>
+              <span id="trainStatus" class="status connecting"></span>
             </div>
             <calcite-combobox id="stationSearch" placeholder="Search stations" selection-mode="single">
             </calcite-combobox>
@@ -198,8 +209,7 @@
                 Show buses
               </calcite-label>
               <span id="busCount" class="count"></span>
-              <span id="busStatus" class="status off">off</span>
-              <calcite-loader class="ws-loader" id="busLoader" type="indeterminate" scale="s" inline></calcite-loader>
+              <span id="busStatus" class="status off"></span>
             </div>
             <calcite-combobox id="busRouteSearch" placeholder="Filter by route" selection-mode="single" style="display:none">
             </calcite-combobox>
@@ -217,13 +227,72 @@
       </calcite-panel>
     </div>
     <script type="module">
-      const [GraphicsLayer, FeatureLayer, Graphic, reactiveUtils] =
-        await $arcgis.import([
+      // --- Token management ---
+      let accessToken = null;
+      let refreshPromise = null;
+
+      async function fetchToken() {
+        const res = await fetch("/auth/token", { method: "POST" });
+        const data = await res.json();
+        accessToken = data.token;
+      }
+
+      async function refreshToken() {
+        if (refreshPromise) return refreshPromise;
+        refreshPromise = (async () => {
+          try {
+            const res = await fetch("/auth/refresh", { method: "POST", credentials: "same-origin" });
+            if (res.ok) {
+              const data = await res.json();
+              accessToken = data.token;
+            } else {
+              await fetchToken();
+            }
+          } catch {
+            await fetchToken();
+          } finally {
+            refreshPromise = null;
+          }
+        })();
+        return refreshPromise;
+      }
+
+      async function authFetch(url, options = {}) {
+        const headers = { ...options.headers, Authorization: `Bearer ${accessToken}` };
+        let res = await fetch(url, { ...options, headers });
+        if (res.status === 401) {
+          await refreshToken();
+          headers.Authorization = `Bearer ${accessToken}`;
+          res = await fetch(url, { ...options, headers });
+        }
+        return res;
+      }
+
+      export function debounce(fn, wait, immediate = false) {
+        let timeout;
+
+        return function (...args) {
+          const context = this;
+          const callNow = immediate && !timeout;
+
+          clearTimeout(timeout);
+
+          timeout = setTimeout(() => {
+            timeout = null;
+            if (!immediate) fn.apply(context, args);
+          }, wait);
+
+          if (callNow) fn.apply(context, args);
+        };
+      }
+
+      const [_, [GraphicsLayer, FeatureLayer, Graphic, reactiveUtils]] = await Promise.all([fetchToken(), $arcgis.import([
           "@arcgis/core/layers/GraphicsLayer.js",
           "@arcgis/core/layers/FeatureLayer.js",
           "@arcgis/core/Graphic.js",
           "@arcgis/core/core/reactiveUtils.js",
-        ]);
+        ])
+      ]);
 
       const LINE_COLORS = {
             red: "#E51636",
@@ -397,7 +466,7 @@
               type: "simple",
               symbol: {
                 type: "simple-marker",
-                color: "#4fc3f7",
+                color: "#00B140",
                 path: "M18,11H6V6H18M16.5,17A1.5,1.5 0 0,1 15,15.5A1.5,1.5 0 0,1 16.5,14A1.5,1.5 0 0,1 18,15.5A1.5,1.5 0 0,1 16.5,17M7.5,17A1.5,1.5 0 0,1 6,15.5A1.5,1.5 0 0,1 7.5,14A1.5,1.5 0 0,1 9,15.5A1.5,1.5 0 0,1 7.5,17M4,16C4,16.88 4.39,17.67 5,18.22V20A1,1 0 0,0 6,21H7A1,1 0 0,0 8,20V19H16V20A1,1 0 0,0 17,21H18A1,1 0 0,0 19,20V18.22C19.61,17.67 20,16.88 20,16V6C20,2.5 16.42,2 12,2C7.58,2 4,2.5 4,6V16Z",
                 size: 14,
                 outline: { color: "#FFFFFF", width: 1 },
@@ -512,6 +581,7 @@
           });
 
           const entrancesLayer = new FeatureLayer({
+            visible: false,
             source: [],
             objectIdField: "ObjectID",
             geometryType: "point",
@@ -532,6 +602,7 @@
               },
             },
             labelingInfo: [{
+              where: "1=0",
               labelExpressionInfo: {
                 expression: '$feature.Name + TextFormatting.NewLine + $feature.Description',
               },
@@ -548,6 +619,7 @@
           });
 
           const busStopsLayer = new FeatureLayer({
+            visible: false,
             source: [],
             objectIdField: "ObjectID",
             geometryType: "point",
@@ -568,6 +640,7 @@
               },
             },
             labelingInfo: [{
+              where: "1=0",
               labelExpressionInfo: { expression: "$feature.Name" },
               symbol: {
                 backgroundColor: [0, 0, 0, .4],
@@ -609,9 +682,9 @@
           const stationsByCode = {};
           const stationSearchEl = document.getElementById("stationSearch");
 
-          fetch("/api/stations")
+          authFetch("/api/stations")
             .then((res) => res.json())
-            .then((stations) => {
+            .then(async (stations) => {
               const features = stations.map((station, i) =>
                 new Graphic({
                   geometry: {
@@ -634,7 +707,7 @@
                 })
               );
 
-              stationsLayer.applyEdits({ addFeatures: features });
+              const applyEditsPromise = stationsLayer.applyEdits({ addFeatures: features });
 
               // Populate combobox and lookup map
               const seen = new Set();
@@ -647,6 +720,20 @@
                 item.value = s.Code;
                 item.heading = s.Name;
                 stationSearchEl.appendChild(item);
+              }
+
+              // Restore saved station selection
+              const savedStation = showTrains && localStorage.getItem("selectedStation");
+              if (savedStation && stationsByCode[savedStation]) {
+                stationSearchEl.value = savedStation;
+                showArrivals(savedStation);
+                await viewReady;
+                const layerView = await view.whenLayerView(stationsLayer);
+                await applyEditsPromise;
+                const results = await stationsLayer.queryFeatures({ returnGeometry: true, where: `Code = '${savedStation}'`})
+                const station = results.features[0];
+                stationHighlight = layerView.highlight(station);
+                view.goTo({ target: station, zoom: 15 }, { duration: 500 });
               }
             })
             .catch((err) => console.error("Failed to load stations:", err));
@@ -669,6 +756,7 @@
           let trainReconnectDelay = 1000;
           let busReconnectTimer = null;
           let busReconnectDelay = 1000;
+          let firstBusesWritePromise;
           const MAX_RECONNECT_DELAY = 30000;
 
           const trainStatusEl = document.getElementById("trainStatus");
@@ -678,13 +766,19 @@
           const trainCountEl = document.getElementById("trainCount");
           const busCountEl = document.getElementById("busCount");
 
-          const trainLoaderEl = document.getElementById("trainLoader");
-          const busLoaderEl = document.getElementById("busLoader");
+          function clearFeatureLayer(layer) {
+            layer.queryFeatures().then(result => {
+              if (result.features.length > 0) {
+                layer.applyEdits({ deleteFeatures: result.features });
+              }
+            });
+          }
+
           const loaderTimers = new WeakMap();
           function flashLoader(el) {
-            el.classList.add("active");
+            el.classList.add("flashing");
             clearTimeout(loaderTimers.get(el));
-            loaderTimers.set(el, setTimeout(() => el.classList.remove("active"), 1000));
+            loaderTimers.set(el, setTimeout(() => el.classList.remove("flashing"), 1000));
           }
 
           const setStatus = (el, state) => {
@@ -695,7 +789,7 @@
               off: "off",
               disconnected: "disconnected",
             };
-            el.textContent = labels[state] || state;
+            el.title = labels[state] || state;
             el.className = "status " + state;
           };
 
@@ -709,19 +803,21 @@
             if (trainWs) return;
             linesLayer.visible = true;
             stationsLayer.visible = true;
-            entrancesLayer.visible = true;
             setStatus(trainStatusEl, "connecting");
             trainWs = new WebSocket(
-              `${wsProtocol}//${location.host}/ws/trains`,
+              `${wsProtocol}//${location.host}/ws/trains?token=${encodeURIComponent(accessToken)}`,
             );
 
             trainWs.onopen = () => {
+              // Clear stale features from previous connection
+              clearFeatureLayer(trainsLayer);
+              trainOids = {};
               trainReconnectDelay = 1000;
               setStatus(trainStatusEl, "live");
             };
 
             trainWs.onmessage = (event) => {
-              flashLoader(trainLoaderEl);
+              flashLoader(trainStatusEl);
               const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
               const updateFeatures = [];
@@ -778,8 +874,14 @@
               updateCount(trainCountEl, trainOids);
             };
 
-            trainWs.onclose = () => {
+            trainWs.onclose = async (event) => {
               trainWs = null;
+              if (event.code === 4001) {
+                await refreshToken();
+                trainReconnectDelay = 1000;
+                connectTrains();
+                return;
+              }
               if (trainsCheckEl.checked) {
                 setStatus(trainStatusEl, "reconnecting");
                 trainReconnectTimer = setTimeout(() => {
@@ -809,13 +911,7 @@
               trainWs.close();
               trainWs = null;
             }
-            trainsLayer.queryFeatures().then((result) => {
-              if (result.features.length > 0) {
-                trainsLayer.applyEdits({
-                  deleteFeatures: result.features,
-                });
-              }
-            });
+            clearFeatureLayer(trains);
 
             trainOids = {};
             trainNextOid = 1;
@@ -828,16 +924,19 @@
             if (busWs) return;
             setStatus(busStatusEl, "connecting");
             busWs = new WebSocket(
-              `${wsProtocol}//${location.host}/ws/buses`,
+              `${wsProtocol}//${location.host}/ws/buses?token=${encodeURIComponent(accessToken)}`,
             );
 
             busWs.onopen = () => {
+              // Clear stale features from previous connection
+              clearFeatureLayer(busesLayer);
+              busOids = {};
               busReconnectDelay = 1000;
               setStatus(busStatusEl, "live");
             };
 
             busWs.onmessage = (event) => {
-              flashLoader(busLoaderEl);
+              flashLoader(busStatusEl);
               const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
               const updateFeatures = [];
@@ -886,13 +985,22 @@
               if (updateFeatures.length) edits.updateFeatures = updateFeatures;
               if (deleteFeatures.length) edits.deleteFeatures = deleteFeatures;
               if (addFeatures.length || updateFeatures.length || deleteFeatures.length) {
-                busesLayer.applyEdits(edits);
+                const busPromise = busesLayer.applyEdits(edits);
+                if (!firstBusesWritePromise) {
+                  firstBusesWritePromise = busPromise;
+                }
               }
               updateCount(busCountEl, busOids);
             };
 
-            busWs.onclose = () => {
+            busWs.onclose = async (event) => {
               busWs = null;
+              if (event.code === 4001) {
+                await refreshToken();
+                busReconnectDelay = 1000;
+                connectBuses();
+                return;
+              }
               if (busesCheckEl.checked) {
                 setStatus(busStatusEl, "reconnecting");
                 busReconnectTimer = setTimeout(() => {
@@ -919,13 +1027,7 @@
               busWs.close();
               busWs = null;
             }
-            busesLayer.queryFeatures().then((result) => {
-              if (result.features.length > 0) {
-                busesLayer.applyEdits({
-                  deleteFeatures: result.features,
-                });
-              }
-            });
+            clearFeatureLayer(busesLayer);
             busOids = {};
             busNextOid = 1;
             busCountEl.textContent = "";
@@ -934,6 +1036,10 @@
 
           // --- Toggle handlers ---
           trainsCheckEl.addEventListener("calciteCheckboxChange", () => {
+            localStorage.setItem("showTrains", trainsCheckEl.checked ? "1" : "0");
+            if (!trainsCheckEl.checked) {
+              localStorage.removeItem("selectedStation");
+            }
             if (trainsCheckEl.checked) {
               trainsLayer.visible = true;
               stationSearchEl.style.display = "";
@@ -952,6 +1058,10 @@
           });
 
           busesCheckEl.addEventListener("calciteCheckboxChange", () => {
+            localStorage.setItem("showBuses", busesCheckEl.checked ? "1" : "0");
+            if (!busesCheckEl.checked) {
+              localStorage.removeItem("selectedBusRoute");
+            }
             if (busesCheckEl.checked) {
               busesLayer.visible = true;
               busRouteSearchEl.style.display = "";
@@ -970,9 +1080,9 @@
           const busRouteSearchEl = document.getElementById("busRouteSearch");
           const busRoutesByID = {};
 
-          fetch("/api/bus-routes")
+          authFetch("/api/bus-routes")
             .then((res) => res.json())
-            .then((routes) => {
+            .then(async (routes) => {
               for (const r of routes) {
                 busRoutesByID[r.RouteID] = r;
               }
@@ -984,22 +1094,31 @@
                 item.description = r.Name;
                 busRouteSearchEl.appendChild(item);
               }
+
+              // Restore saved bus route selection
+              const savedRoute = showBuses && localStorage.getItem("selectedBusRoute");
+              if (savedRoute && busRoutesByID[savedRoute]) {
+                busRouteSearchEl.value = savedRoute;
+                busRouteDetailsEl.style.display = "";
+                busesLayer.definitionExpression = `RouteID = '${savedRoute}'`;
+                // only zoom to buses if trains are not shown
+                if (!showTrains) {
+                  await viewReady;
+                  await firstBusesWritePromise;
+                  const results = await busesLayer.queryFeatures({ returnGeometry: true, where: `RouteID = '${savedRoute}'`})
+                  const buses = results.features;
+                  view.goTo({ target: buses }, { duration: 500 });
+                }
+              }
             })
             .catch((err) => console.error("Failed to load bus routes:", err));
 
           const busRouteDetailsEl = document.getElementById("busRouteDetails");
           const busStopsToggle = document.getElementById("busStopsToggle");
 
-          const clearBusStops = () => {
-            busStopsLayer.queryFeatures().then((result) => {
-              if (result.features.length > 0) {
-                busStopsLayer.applyEdits({ deleteFeatures: result.features });
-              }
-            }).catch(() => {});
-          };
-
           const clearBusRouteSelection = () => {
-            clearBusStops();
+            clearFeatureLayer(busStopsLayer);
+            busStopsLayer.visible = false;
             busStopsToggle.checked = false;
             busRouteDetailsEl.style.display = "none";
           };
@@ -1018,13 +1137,29 @@
             }
           };
 
-          busRouteSearchEl.addEventListener("calciteComboboxChange", () => {
+          function closeKeyboard(combobox) {
+            const shadowInput = combobox?.shadowRoot?.querySelector("input");
+            if (shadowInput) shadowInput.blur();
+            combobox?.blur();
+            const sink = document.getElementById("keyboard-dismiss");
+            sink?.focus();
+            sink?.blur();
+          }
+
+          // Dismiss mobile keyboard after combobox dropdown closes
+          // (calciteComboboxClose fires after Calcite finishes focus management)
+          stationSearchEl.addEventListener("calciteComboboxClose", () => closeKeyboard(stationSearchEl));
+          busRouteSearchEl.addEventListener("calciteComboboxClose", () => closeKeyboard(busRouteSearchEl));
+
+          busRouteSearchEl.addEventListener("calciteComboboxChange", (e) => {
             clearBusRouteSelection();
             const routeId = busRouteSearchEl.value;
             if (!routeId) {
+              localStorage.removeItem("selectedBusRoute");
               busesLayer.definitionExpression = "1=1";
               return;
             }
+            localStorage.setItem("selectedBusRoute", routeId);
             busRouteDetailsEl.style.display = "";
             busesLayer.definitionExpression = `RouteID = '${routeId}'`;
             zoomToFilteredBuses();
@@ -1033,12 +1168,13 @@
           // Bus stops toggle
           busStopsToggle.addEventListener("calciteSwitchChange", () => {
             if (!busStopsToggle.checked) {
-              clearBusStops();
+              clearFeatureLayer(busStopsLayer);
+              busStopsLayer.visible = false;
               return;
             }
             const routeId = busRouteSearchEl.value;
             if (!routeId) return;
-            fetch(`/api/bus-stops?routeId=${encodeURIComponent(routeId)}`)
+            authFetch(`/api/bus-stops?routeId=${encodeURIComponent(routeId)}`)
               .then((res) => res.json())
               .then((stops) => {
                 if (stops.length === 0) return;
@@ -1055,7 +1191,9 @@
                     },
                   })
                 );
+                busStopsLayer.visible = true;
                 busStopsLayer.applyEdits({ addFeatures: features });
+                view.goTo(features);
               })
               .catch((err) => console.error("Failed to load bus stops:", err));
           });
@@ -1175,14 +1313,12 @@
               window.removeEventListener("pointercancel", onUp);
               sheetCleanup = null;
             };
-
-            snapSheet("min", false);
           }
 
           /** Expand sheet to at least mid if currently below mid. */
           function sheetExpandIfNeeded() {
             if (!smallScreenQuery.matches) return;
-            if (currentSnap === "peek" || currentSnap === "min") snapSheet("mid");
+            if (currentSnap === "peek" || currentSnap === "min" || currentSnap === "mid") snapSheet("max");
           }
 
           const smallScreenQuery = window.matchMedia("(max-width: 768px)");
@@ -1201,9 +1337,14 @@
           const stationDetails = document.getElementById("stationDetails");
           const arrivalsList = document.getElementById("arrivalsList");
 
+          let selectedTrain;
           arrivalsList.addEventListener("calciteListChange", async () => {
             const selected = arrivalsList.selectedItems;
-            if (selected.length === 0) return;
+            if (selected.length === 0) {
+              selectedTrain = null;
+              return;
+            }
+            selectedTrain = selected[0].value;
             const arrival = selected[0]._arrival;
             if (!arrival?.TrainId) return;
 
@@ -1246,7 +1387,9 @@
               item.description = `${a.Car || "?"} cars · ${minuteDescription}`;
               item.innerHTML = `<span slot="content-start" class="arrival-line" style="background:${color}"></span>`;
               item._arrival = a;
+              item.value =  a.TrainId;
               arrivalsList.appendChild(item);
+              item.selected = selectedTrain && selectedTrain === a.TrainId;
             }
             if (arrivals.length === 0) {
               const item = document.createElement("calcite-list-item");
@@ -1257,17 +1400,10 @@
 
           const entrancesToggle = document.getElementById("entrancesToggle");
 
-          const clearEntrances = () => {
-            entrancesLayer.queryFeatures().then(result => {
-              if (result.features.length > 0) {
-                entrancesLayer.applyEdits({ deleteFeatures: result.features });
-              }
-            });
-          };
-
           const cleanupStationSelection = () => {
             // Clear entrances and reset toggle
-            clearEntrances();
+            clearFeatureLayer(entrancesLayer);
+            entrancesLayer.visible = false;
             entrancesToggle.checked = false;
             // Close arrivals WebSocket
             if (arrivalsWs) {
@@ -1279,6 +1415,7 @@
             stationDetails.style.display = "none";
             arrivalsList.innerHTML = "";
             selectedStationCode = null;
+            selectedTrain = null;
 
             if (activeHighlight) {
               activeHighlight.remove();
@@ -1293,13 +1430,20 @@
             sheetExpandIfNeeded();
 
             arrivalsWs = new WebSocket(
-              `${wsProtocol}//${location.host}/ws/arrivals/${encodeURIComponent(code)}`
+              `${wsProtocol}//${location.host}/ws/arrivals/${encodeURIComponent(code)}?token=${encodeURIComponent(accessToken)}`
             );
             arrivalsWs.onmessage = (event) => {
-              flashLoader(trainLoaderEl);
+              flashLoader(trainStatusEl);
               if (selectedStationCode !== code) return;
               const arrivals = JSON.parse(event.data);
               renderArrivals(arrivals);
+            };
+            arrivalsWs.onclose = async (event) => {
+              if (event.code === 4001 && selectedStationCode === code) {
+                await refreshToken();
+                arrivalsWs = null;
+                showArrivals(code);
+              }
             };
             arrivalsWs.onerror = () => {
               console.error("Arrivals WebSocket error");
@@ -1307,14 +1451,18 @@
           };
 
           // Station combobox search
-          stationSearchEl.addEventListener("calciteComboboxChange", () => {
+          stationSearchEl.addEventListener("calciteComboboxChange", (e) => {
             if (stationHighlight) {
               stationHighlight.remove();
               stationHighlight = null;
             }
             const code = stationSearchEl.value;
             cleanupStationSelection();
-            if (!code) return;
+            if (!code) {
+              localStorage.removeItem("selectedStation");
+              return;
+            }
+            localStorage.setItem("selectedStation", code);
             const station = stationsByCode[code];
             if (!station) return;
 
@@ -1333,14 +1481,15 @@
           // Entrances toggle
           entrancesToggle.addEventListener("calciteSwitchChange", () => {
             if (!entrancesToggle.checked) {
-              clearEntrances();
+              clearFeatureLayer(entrancesLayer);
+              entrancesLayer.visible = false;
               return;
             }
             const station = stationsByCode[selectedStationCode];
             if (!station) return;
             const { Lat: latitude, Lon: longitude } = station;
 
-            fetch(`/api/entrances?lat=${latitude}&lon=${longitude}&radius=500`)
+            authFetch(`/api/entrances?lat=${latitude}&lon=${longitude}&radius=500`)
               .then(res => res.json())
               .then(entrances => {
                 if (entrances.length === 0) return;
@@ -1357,6 +1506,7 @@
                     },
                   })
                 );
+                entrancesLayer.visible = true;
                 entrancesLayer.applyEdits({ addFeatures: features });
                 view.goTo(features);
               })
@@ -1375,6 +1525,40 @@
             await viewReady;
             view = mapEl.view;
             map = mapEl.map;
+
+            // show bus stops and station entrances label on mouseover
+            const onPointer = async e => {
+              const hits = await view.hitTest(e);
+              const { results } = hits;
+              const entrancesHits = results.filter(r => r.type === "graphic" && r.layer === entrancesLayer);
+              const stopsHits = results.filter(r => r.type === "graphic" && r.layer === busStopsLayer);
+              if (entrancesHits.length) {
+                entrancesLayer.labelingInfo[0].where = entrancesHits.map(result => `ObjectID = ${result.graphic.attributes.ObjectID}`).join(" OR ");
+              }
+              else {
+                entrancesLayer.labelingInfo[0].where = "1=0";
+              }
+
+              if (stopsHits.length) {
+                busStopsLayer.labelingInfo[0].where = stopsHits.map(result => `ObjectID = ${result.graphic.attributes.ObjectID}`).join(" OR ");
+              }
+              else {
+                busStopsLayer.labelingInfo[0].where = "1=0";
+              }
+            }
+
+            // Only add pointer handles when the relevant layers are visible
+            let pointerHandles = [];
+            reactiveUtils.watch(() => [entrancesLayer.visible, busStopsLayer.visible], (visibility) => {
+              const [entrancesVisible, busStopsVisible] = visibility;
+              if (entrancesVisible || busStopsVisible && pointerHandles.length === 0) {
+                pointerHandles.push(view.on("pointer-move", debounce(onPointer, 50)), view.on("pointer-down", debounce(onPointer, 25)))
+              }
+              else {
+                pointerHandles.forEach(h => h.remove());
+                pointerHandles = [];
+              }
+            })
 
             map.add(linesLayer);
             map.add(stationsLayer);
@@ -1415,28 +1599,81 @@
               localStorage.setItem("aboutDismissed", "1");
             });
 
-            reactiveUtils.watch(() => view.popup?.selectedFeature, (feature) => {
-              cleanupStationSelection();
-              if (!feature) return;
-              const attrs = feature.attributes;
-              if (!attrs.Code) {
-                stationSearchEl.value = "";
-                return;
-              }
-              stationSearchEl.value = attrs.Code;
-              showArrivals(attrs.Code);
-            });
-
-            reactiveUtils.watch(() => view.popup?.visible, (visible) => {
-              if (!visible) {
-                cleanupStationSelection();
-                stationSearchEl.value = "";
-              }
-            });
+            // handle popup feature...not used for now
+            // reactiveUtils.watch(() => view.popup?.selectedFeature, (feature) => {
+            //   if (!feature) return;
+            // });
           }
 
-          // --- Initial connections ---
-          connectTrains();
+          // --- Initial connections (restore saved preferences) ---
+          const savedTrains = localStorage.getItem("showTrains");
+          const savedBuses = localStorage.getItem("showBuses");
+          const showTrains = savedTrains !== null ? savedTrains === "1" : true;
+          const showBuses = savedBuses !== null ? savedBuses === "1" : false;
+
+          if (showTrains) {
+            trainsCheckEl.checked = true;
+            connectTrains();
+          } else {
+            trainsCheckEl.checked = false;
+            trainsLayer.visible = false;
+            stationsLayer.visible = false;
+            linesLayer.visible = false;
+            entrancesLayer.visible = false;
+            stationSearchEl.style.display = "none";
+            setStatus(trainStatusEl, "off");
+          }
+
+          if (showBuses) {
+            busesCheckEl.checked = true;
+            busesLayer.visible = true;
+            busRouteSearchEl.style.display = "";
+            connectBuses();
+            // switch to buses tab if trains are not on
+            if (!showTrains) {
+              document.querySelector(".bus-tab-title").setAttribute("selected", true);
+            }
+          }
+
+          // --- Visibility change: close sockets when hidden, reopen when visible ---
+          let hiddenByVisibility = false;
+
+          document.addEventListener("visibilitychange", () => {
+            if (document.hidden) {
+              hiddenByVisibility = true;
+              // Silently close all WebSockets (null onclose to prevent reconnect logic)
+              if (trainReconnectTimer) {
+                clearTimeout(trainReconnectTimer);
+                trainReconnectTimer = null;
+              }
+              if (trainWs) {
+                trainWs.onclose = null;
+                trainWs.close();
+                trainWs = null;
+              }
+              if (busReconnectTimer) {
+                clearTimeout(busReconnectTimer);
+                busReconnectTimer = null;
+              }
+              if (busWs) {
+                busWs.onclose = null;
+                busWs.close();
+                busWs = null;
+              }
+              if (arrivalsWs) {
+                arrivalsWs.onclose = null;
+                arrivalsWs.close();
+                arrivalsWs = null;
+              }
+            } else if (hiddenByVisibility) {
+              hiddenByVisibility = false;
+              // Reconnect based on current state
+              if (trainsCheckEl.checked) connectTrains();
+              if (busesCheckEl.checked) connectBuses();
+              if (selectedStationCode) showArrivals(selectedStationCode);
+            }
+          });
+
           initView();
     </script>
   </body>

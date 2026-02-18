@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Metro Lines Editor</title>
+    <link rel="stylesheet" href="https://js.arcgis.com/4.34/esri/themes/dark/main.css" />
+    <script src="https://js.arcgis.com/4.34/"></script>
+    <style>
+      html, body, #viewDiv {
+        margin: 0;
+        padding: 0;
+        width: 100%;
+        height: 100%;
+      }
+      #toolbar {
+        position: fixed;
+        top: 15px;
+        right: 15px;
+        z-index: 1;
+        display: flex;
+        gap: 8px;
+      }
+      #toolbar button {
+        padding: 8px 16px;
+        background: #1a1a1a;
+        color: #fff;
+        border: 1px solid #555;
+        border-radius: 4px;
+        cursor: pointer;
+        font-size: 14px;
+      }
+      #toolbar button:hover {
+        background: #333;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="viewDiv"></div>
+    <div id="toolbar">
+      <button id="exportBtn">Export GeoJSON</button>
+    </div>
+    <script type="module">
+      const [Map, MapView, GraphicsLayer, Graphic, Sketch, Polyline, projection] =
+        await $arcgis.import([
+          "@arcgis/core/Map.js",
+          "@arcgis/core/views/MapView.js",
+          "@arcgis/core/layers/GraphicsLayer.js",
+          "@arcgis/core/Graphic.js",
+          "@arcgis/core/widgets/Sketch.js",
+          "@arcgis/core/geometry/Polyline.js",
+          "@arcgis/core/geometry/projection.js"
+        ]);
+
+      const LINE_COLORS = {
+        red: "#E51636",
+        blue: "#0795D3",
+        green: "#00B140",
+        orange: "#ED8B00",
+        silver: "#A2A4A1",
+        yellow: "#FFD100",
+      };
+
+      const LINE_RGBA = {
+        red:    [229, 22, 54, 255],
+        blue:   [7, 149, 211, 255],
+        green:  [0, 177, 64, 255],
+        orange: [237, 139, 0, 255],
+        silver: [162, 164, 161, 255],
+        yellow: [255, 209, 0, 255],
+      };
+
+      const LINE_SPACING = 3;
+
+      function makeLineSymbol(lineNames) {
+        if (lineNames.length === 1) {
+          return {
+            type: "simple-line",
+            color: LINE_COLORS[lineNames[0]],
+            width: 3,
+          };
+        }
+        const n = lineNames.length;
+        const totalSpan = (n - 1) * LINE_SPACING;
+        const symbolLayers = lineNames.map((name, i) => ({
+          type: "CIMSolidStroke",
+          width: 3,
+          color: LINE_RGBA[name],
+          effects: [{
+            type: "CIMGeometricEffectOffset",
+            offset: -totalSpan / 2 + i * LINE_SPACING,
+            method: "Rounded",
+            option: "Fast",
+          }],
+        }));
+        return {
+          type: "cim",
+          data: {
+            type: "CIMSymbolReference",
+            symbol: {
+              type: "CIMLineSymbol",
+              symbolLayers,
+            },
+          },
+        };
+      }
+
+      const graphicsLayer = new GraphicsLayer();
+
+      const map = new Map({
+        basemap: "dark-gray-vector",
+        layers: [graphicsLayer],
+      });
+
+      const view = new MapView({
+        container: "viewDiv",
+        map,
+        center: [-77.04, 38.9],
+        zoom: 12,
+      });
+
+      // Load GeoJSON and add as graphics
+      const res = await fetch("/data/metro_lines_processed.geojson");
+      const geojson = await res.json();
+      await projection.load();
+
+      for (const feature of geojson.features) {
+        const coords = Math.abs(feature.geometry.coordinates[0][0]) > 100 ? projection.project(new Polyline({
+            paths: [feature.geometry.coordinates],
+            spatialReference: { wkid: 102100 },
+          }), { wkid: 4326 }).paths[0] : feature.geometry.coordinates;
+        const lines = feature.properties.lines;
+
+        graphicsLayer.add(new Graphic({
+          geometry: new Polyline({
+            paths: [coords],
+            spatialReference: { wkid: 4326 },
+          }),
+          symbol: makeLineSymbol(lines),
+          attributes: { lines: JSON.stringify(lines) },
+        }));
+      }
+
+      // Sketch widget for editing
+      const sketch = new Sketch({
+        view,
+        layer: graphicsLayer,
+        creationMode: "update",
+        availableCreateTools: [],
+      });
+
+      view.ui.add(sketch, "bottom-left");
+
+      // Export to GeoJSON
+      document.getElementById("exportBtn").addEventListener("click", () => {
+        const features = graphicsLayer.graphics.map((g) => {
+          const coords = g.geometry.paths[0].map(([x, y]) => [x, y]);
+          const lines = JSON.parse(g.attributes.lines);
+          return {
+            type: "Feature",
+            properties: { lines },
+            geometry: {
+              type: "LineString",
+              coordinates: coords,
+            },
+          };
+        });
+
+        const fc = {
+          type: "FeatureCollection",
+          features: features.toArray(),
+        };
+
+        const blob = new Blob([JSON.stringify(fc, null, 2)], { type: "application/json" });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = "metro_lines_processed.geojson";
+        a.click();
+        URL.revokeObjectURL(url);
+      });
+    </script>
+  </body>
+</html>

@@ -14,6 +14,7 @@ import {
   startPolling as startBusPolling,
   stopPolling as stopBusPolling,
 } from "./buses.ts";
+import { createTokens, refreshAccessToken, verifyAccessToken } from "./auth.ts";
 
 const circuitMap = await loadCircuitMap();
 
@@ -32,12 +33,27 @@ function handleWebSocket(
   getSnapshot: () => { updates: unknown[]; removals: string[] },
   onStartPolling: () => void,
   onStopPolling: () => void,
+  tokenExpiry?: number,
 ): Response {
   const { socket, response } = Deno.upgradeWebSocket(req);
 
   let pingInterval: number;
+  let expiryTimeout: number | undefined;
 
   socket.onopen = () => {
+    if (tokenExpiry !== undefined) {
+      const ms = tokenExpiry * 1000 - Date.now();
+      if (ms > 0) {
+        expiryTimeout = setTimeout(() => {
+          if (socket.readyState === WebSocket.OPEN) {
+            socket.close(4001, "Token expired");
+          }
+        }, ms);
+      } else {
+        socket.close(4001, "Token expired");
+        return;
+      }
+    }
     clients.add(socket);
     if (clients.size === 1) onStartPolling();
     const snapshot = getSnapshot();
@@ -53,6 +69,7 @@ function handleWebSocket(
 
   socket.onclose = () => {
     clearInterval(pingInterval);
+    if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
     clients.delete(socket);
     if (clients.size === 0) onStopPolling();
   };
@@ -66,6 +83,7 @@ const CONTENT_TYPES: Record<string, string> = {
   ".css": "text/css",
   ".json": "application/json",
   ".geojson": "application/json",
+  ".svg": "image/svg+xml",
 };
 
 async function serveStatic(path: string): Promise<Response> {
@@ -89,24 +107,95 @@ async function serveStatic(path: string): Promise<Response> {
   }
 }
 
-Deno.serve({ port: 8080 }, async (req) => {
+async function authenticate(
+  req: Request,
+): Promise<{ payload: { sub: string; exp: number } } | { error: Response }> {
+  const authHeader = req.headers.get("authorization");
+  if (!authHeader?.startsWith("Bearer ")) {
+    return { error: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json" } }) };
+  }
+  const payload = await verifyAccessToken(authHeader.slice(7));
+  if (!payload) {
+    return { error: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json" } }) };
+  }
+  return { payload };
+}
+
+async function authenticateWs(
+  req: Request,
+): Promise<{ payload: { sub: string; exp: number } } | { error: Response }> {
+  const url = new URL(req.url);
+  const token = url.searchParams.get("token");
+  if (!token) {
+    return { error: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json" } }) };
+  }
+  const payload = await verifyAccessToken(token);
+  if (!payload) {
+    return { error: new Response(JSON.stringify({ error: "Unauthorized" }), { status: 401, headers: { "content-type": "application/json" } }) };
+  }
+  return { payload };
+}
+
+Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
+  const url = new URL(req.url);
+  const pathname = url.pathname;
+
+  // Auth endpoints (no auth required)
+  if (pathname === "/auth/token" && req.method === "POST") {
+    const { accessToken, refreshTokenCookie } = await createTokens();
+    return new Response(JSON.stringify({ token: accessToken }), {
+      headers: {
+        "content-type": "application/json",
+        "set-cookie": refreshTokenCookie,
+      },
+    });
+  }
+
+  if (pathname === "/auth/refresh" && req.method === "POST") {
+    const result = await refreshAccessToken(req.headers.get("cookie"));
+    if (!result) {
+      return new Response(JSON.stringify({ error: "Invalid refresh token" }), {
+        status: 401,
+        headers: { "content-type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ token: result.accessToken }), {
+      headers: {
+        "content-type": "application/json",
+        "set-cookie": result.refreshTokenCookie,
+      },
+    });
+  }
+
+  // WebSocket routes (auth via query param)
   if (req.headers.get("upgrade") === "websocket") {
-    const wsUrl = new URL(req.url);
-    if (wsUrl.pathname === "/ws/trains") {
-      return handleWebSocket(req, trainClients, getTrainSnapshot, startTrainPolling, stopTrainPolling);
+    const auth = await authenticateWs(req);
+    if ("error" in auth) {
+      // Upgrade then immediately close with 4001 so the client gets a
+      // distinguishable code (a plain 401 shows up as 1006 on the client).
+      const { socket, response } = Deno.upgradeWebSocket(req);
+      socket.onopen = () => socket.close(4001, "Token expired");
+      return response;
     }
-    if (wsUrl.pathname === "/ws/buses") {
-      return handleWebSocket(req, busClients, getBusSnapshot, startBusPolling, stopBusPolling);
+
+    if (pathname === "/ws/trains") {
+      return handleWebSocket(req, trainClients, getTrainSnapshot, startTrainPolling, stopTrainPolling, auth.payload.exp);
     }
-    const arrivalsMatch = wsUrl.pathname.match(/^\/ws\/arrivals\/([A-Za-z0-9]+)$/);
+    if (pathname === "/ws/buses") {
+      return handleWebSocket(req, busClients, getBusSnapshot, startBusPolling, stopBusPolling, auth.payload.exp);
+    }
+    const arrivalsMatch = pathname.match(/^\/ws\/arrivals\/([A-Za-z0-9]+)$/);
     if (arrivalsMatch) {
-      return handleArrivalsSocket(req, arrivalsMatch[1]);
+      return handleArrivalsSocket(req, arrivalsMatch[1], auth.payload.exp);
     }
     return new Response("Not Found", { status: 404 });
   }
 
-  const url = new URL(req.url);
-  let pathname = url.pathname;
+  // Auth gate for all /api/* routes
+  if (pathname.startsWith("/api/")) {
+    const auth = await authenticate(req);
+    if ("error" in auth) return auth.error;
+  }
 
   // API: entrances
   if (pathname === "/api/entrances") {
@@ -195,7 +284,7 @@ Deno.serve({ port: 8080 }, async (req) => {
   }
 
   // Serve public/ directory (default to index.html for directory paths)
-  if (pathname.endsWith("/")) pathname += "index.html";
-  const filePath = "./public" + pathname;
+  const publicPath = pathname.endsWith("/") ? pathname + "index.html" : pathname;
+  const filePath = "./public" + publicPath;
   return serveStatic(filePath);
 });

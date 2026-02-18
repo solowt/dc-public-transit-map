@@ -3,10 +3,12 @@
     "dev": "APP_ENV=development deno run --watch -A main.ts",
     "start": "APP_ENV=production deno run -A main.ts",
     "process-lines": "deno run --allow-read --allow-write scripts/process-lines.ts",
-    "clear-cache": "rm -rf data/cache && echo 'Cache cleared'"
+    "clear-cache": "rm -rf data/cache && echo 'Cache cleared'",
+    "deploy": "./scripts/deploy.sh"
   },
   "imports": {
-    "@std/assert": "jsr:@std/assert@1"
+    "@std/assert": "jsr:@std/assert@1",
+    "@zaubrik/djwt": "jsr:@zaubrik/djwt@3"
   },
   "deploy": {
     "org": "aquarium",

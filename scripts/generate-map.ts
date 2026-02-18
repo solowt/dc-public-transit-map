@@ -8,7 +8,7 @@ import {
 import type { Coord, Polyline } from "./polyline.ts";
 
 const GEOJSON_PATH =
-  new URL("../data/Metro_Lines_Regional.geojson", import.meta.url).pathname;
+  new URL("../data/metro_lines_processed.geojson", import.meta.url).pathname;
 
 const NAME_TO_LINE: Record<string, Line> = {
   red: "RD",
@@ -19,18 +19,104 @@ const NAME_TO_LINE: Record<string, Line> = {
   yellow: "YL",
 };
 
+/** Chain an unordered list of segments into a single coordinate array by matching endpoints. */
+function chainSegments(segments: Coord[][]): Coord[] {
+  if (segments.length === 1) return segments[0];
+
+  const THRESHOLD = 0.001; // ~100m, actual gaps are < 0.0002
+  const n = segments.length;
+
+  // Build adjacency: for each segment pair, find which endpoints connect
+  type Endpoint = "start" | "end";
+  type Connection = { neighbor: number; thisEnd: Endpoint; neighborEnd: Endpoint };
+  const adjacency: Connection[][] = Array.from({ length: n }, () => []);
+
+  function dist(a: Coord, b: Coord): number {
+    return Math.sqrt((a[0] - b[0]) ** 2 + (a[1] - b[1]) ** 2);
+  }
+
+  for (let i = 0; i < n; i++) {
+    for (let j = i + 1; j < n; j++) {
+      const ends: [Endpoint, Coord][] = [
+        ["start", segments[i][0]],
+        ["end", segments[i][segments[i].length - 1]],
+      ];
+      const jEnds: [Endpoint, Coord][] = [
+        ["start", segments[j][0]],
+        ["end", segments[j][segments[j].length - 1]],
+      ];
+      for (const [iEnd, iPt] of ends) {
+        for (const [jEnd, jPt] of jEnds) {
+          if (dist(iPt, jPt) < THRESHOLD) {
+            adjacency[i].push({ neighbor: j, thisEnd: iEnd, neighborEnd: jEnd });
+            adjacency[j].push({ neighbor: i, thisEnd: jEnd, neighborEnd: iEnd });
+            break;
+          }
+        }
+      }
+    }
+  }
+
+  // Start from a terminal segment (one with only 1 neighbor)
+  let startIdx = adjacency.findIndex((adj) => adj.length === 1);
+  if (startIdx === -1) startIdx = 0;
+
+  const result: Coord[] = [];
+  const visited = new Set<number>();
+
+  // First segment: orient so connecting end is last
+  const firstConn = adjacency[startIdx][0];
+  if (firstConn.thisEnd === "start") {
+    // Connecting at start -> reverse so connecting end comes last
+    result.push(...[...segments[startIdx]].reverse());
+  } else {
+    result.push(...segments[startIdx]);
+  }
+  visited.add(startIdx);
+
+  let currentIdx = startIdx;
+  while (visited.size < n) {
+    const conn = adjacency[currentIdx].find((c) => !visited.has(c.neighbor));
+    if (!conn) break;
+
+    const nextIdx = conn.neighbor;
+    // conn.neighborEnd tells us which end of nextIdx connects to currentIdx
+    if (conn.neighborEnd === "start") {
+      // Enters at start, exits at end -> natural order
+      result.push(...segments[nextIdx].slice(1));
+    } else {
+      // Enters at end, exits at start -> reverse
+      const rev = [...segments[nextIdx]].reverse();
+      result.push(...rev.slice(1));
+    }
+    visited.add(nextIdx);
+    currentIdx = nextIdx;
+  }
+
+  return result;
+}
+
 /** Load GeoJSON and build a Polyline for each metro line. */
 async function loadLinePolylines(): Promise<Record<Line, Polyline>> {
   const raw = await Deno.readTextFile(GEOJSON_PATH);
   const geojson = JSON.parse(raw);
 
-  const result = {} as Record<Line, Polyline>;
+  // Group segments by line code
+  const segmentsByLine: Partial<Record<Line, Coord[][]>> = {};
   for (const feature of geojson.features) {
-    const name: string = feature.properties.NAME;
-    const lineCode = NAME_TO_LINE[name];
-    if (!lineCode) continue;
+    const lines: string[] = feature.properties.lines;
     const coords: Coord[] = feature.geometry.coordinates;
-    result[lineCode] = buildPolyline(coords);
+    for (const name of lines) {
+      const lineCode = NAME_TO_LINE[name];
+      if (!lineCode) continue;
+      (segmentsByLine[lineCode] ??= []).push(coords);
+    }
+  }
+
+  // Chain segments and build polylines
+  const result = {} as Record<Line, Polyline>;
+  for (const [line, segments] of Object.entries(segmentsByLine)) {
+    result[line as Line] = buildPolyline(chainSegments(segments!));
   }
   return result;
 }

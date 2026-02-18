@@ -289,81 +289,81 @@ for (const name of lineNames) {
 // different base paths have endpoints ~6m apart. Cluster nearby
 // endpoints and snap them to the centroid of the cluster.
 // ============================================================
-console.log("\nSnapping endpoints...");
+// console.log("\nSnapping endpoints...");
 
-interface Endpoint {
-  fi: number;      // feature index
-  isStart: boolean;
-  coord: Coord;
-}
+// interface Endpoint {
+//   fi: number;      // feature index
+//   isStart: boolean;
+//   coord: Coord;
+// }
 
-const endpoints: Endpoint[] = [];
-for (let i = 0; i < output.length; i++) {
-  const c = output[i].geometry.coordinates;
-  endpoints.push({ fi: i, isStart: true, coord: c[0] });
-  endpoints.push({ fi: i, isStart: false, coord: c[c.length - 1] });
-}
+// const endpoints: Endpoint[] = [];
+// for (let i = 0; i < output.length; i++) {
+//   const c = output[i].geometry.coordinates;
+//   endpoints.push({ fi: i, isStart: true, coord: c[0] });
+//   endpoints.push({ fi: i, isStart: false, coord: c[c.length - 1] });
+// }
 
-// Cluster with single-linkage: two endpoints in same cluster if < 15m
-const parent = endpoints.map((_, i) => i);
-function find(x: number): number {
-  while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-  return x;
-}
-function union(a: number, b: number) { parent[find(a)] = find(b); }
+// // Cluster with single-linkage: two endpoints in same cluster if < 15m
+// const parent = endpoints.map((_, i) => i);
+// function find(x: number): number {
+//   while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+//   return x;
+// }
+// function union(a: number, b: number) { parent[find(a)] = find(b); }
 
-for (let i = 0; i < endpoints.length; i++) {
-  for (let j = i + 1; j < endpoints.length; j++) {
-    if (endpoints[i].fi === endpoints[j].fi) continue;
-    const d = distMeters(
-      endpoints[i].coord[0], endpoints[i].coord[1],
-      endpoints[j].coord[0], endpoints[j].coord[1],
-    );
-    if (d > 0.1 && d < THRESHOLD_METERS) {
-      union(i, j);
-    }
-  }
-}
+// for (let i = 0; i < endpoints.length; i++) {
+//   for (let j = i + 1; j < endpoints.length; j++) {
+//     if (endpoints[i].fi === endpoints[j].fi) continue;
+//     const d = distMeters(
+//       endpoints[i].coord[0], endpoints[i].coord[1],
+//       endpoints[j].coord[0], endpoints[j].coord[1],
+//     );
+//     if (d > 0.1 && d < THRESHOLD_METERS) {
+//       union(i, j);
+//     }
+//   }
+// }
 
-// Group by cluster root
-const clusters = new Map<number, number[]>();
-for (let i = 0; i < endpoints.length; i++) {
-  const root = find(i);
-  if (!clusters.has(root)) clusters.set(root, []);
-  clusters.get(root)!.push(i);
-}
+// // Group by cluster root
+// const clusters = new Map<number, number[]>();
+// for (let i = 0; i < endpoints.length; i++) {
+//   const root = find(i);
+//   if (!clusters.has(root)) clusters.set(root, []);
+//   clusters.get(root)!.push(i);
+// }
 
-let snapped = 0;
-for (const members of clusters.values()) {
-  if (members.length < 2) continue;
+// let snapped = 0;
+// for (const members of clusters.values()) {
+//   if (members.length < 2) continue;
 
-  // Use the endpoint from the feature with the most lines as the
-  // reference point. This keeps the shared corridor's path stable
-  // and snaps solo lines to it (no kink in the multi-line corridor).
-  let bestIdx = members[0];
-  let bestLineCount = output[endpoints[bestIdx].fi].properties.lines.length;
-  for (const idx of members) {
-    const lc = output[endpoints[idx].fi].properties.lines.length;
-    if (lc > bestLineCount) {
-      bestLineCount = lc;
-      bestIdx = idx;
-    }
-  }
-  const ref: Coord = [...endpoints[bestIdx].coord];
+//   // Use the endpoint from the feature with the most lines as the
+//   // reference point. This keeps the shared corridor's path stable
+//   // and snaps solo lines to it (no kink in the multi-line corridor).
+//   let bestIdx = members[0];
+//   let bestLineCount = output[endpoints[bestIdx].fi].properties.lines.length;
+//   for (const idx of members) {
+//     const lc = output[endpoints[idx].fi].properties.lines.length;
+//     if (lc > bestLineCount) {
+//       bestLineCount = lc;
+//       bestIdx = idx;
+//     }
+//   }
+//   const ref: Coord = [...endpoints[bestIdx].coord];
 
-  // Snap all cluster members to the reference
-  for (const idx of members) {
-    const ep = endpoints[idx];
-    const coords = output[ep.fi].geometry.coordinates;
-    if (ep.isStart) {
-      coords[0] = ref;
-    } else {
-      coords[coords.length - 1] = ref;
-    }
-    snapped++;
-  }
-}
-console.log(`  Snapped ${snapped} endpoints in ${clusters.size - [...clusters.values()].filter(m => m.length < 2).length} clusters`);
+//   // Snap all cluster members to the reference
+//   for (const idx of members) {
+//     const ep = endpoints[idx];
+//     const coords = output[ep.fi].geometry.coordinates;
+//     if (ep.isStart) {
+//       coords[0] = ref;
+//     } else {
+//       coords[coords.length - 1] = ref;
+//     }
+//     snapped++;
+//   }
+// }
+// console.log(`  Snapped ${snapped} endpoints in ${clusters.size - [...clusters.values()].filter(m => m.length < 2).length} clusters`);
 
 // ============================================================
 // Write output
