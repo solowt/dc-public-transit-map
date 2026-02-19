@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>DC Transit Map</title>
-    <link rel="icon" href="/favicon.svg?v=10" type="image/svg+xml">
+    <link rel="icon" href="/favicon.svg?v=12" type="image/svg+xml">
     <link
       rel="stylesheet"
       href="https://js.arcgis.com/4.34/esri/themes/dark/main.css"
@@ -117,9 +117,9 @@
         color: #ffa726;
       }
       .status.flashing {
-        filter: drop-shadow(0 0 6px currentColor)
-          drop-shadow(0 0 14px currentColor)
-          drop-shadow(0 0 28px rgba(0,255,255,.7));
+        filter: drop-shadow(0 0 0px currentColor)
+          drop-shadow(0 0 0px currentColor)
+          drop-shadow(0 0 10px currentColor);
       }
       .count {
         font-size: 12px;
@@ -137,7 +137,7 @@
       #aboutNotice {
         display: none;
         position: fixed;
-        top: 30px;
+        bottom: 50%;
         left: 15px;
         right: 15px;
         z-index: 2;
@@ -169,8 +169,8 @@
       <arcgis-locate slot="bottom-left"></arcgis-locate>
     </arcgis-map>
     <calcite-notice id="aboutNotice" closable icon="map" scale="l" width="auto">
-      <span slot="title">WMATA Transit Map</span>
-      <span slot="message">Real-time train and bus positions via the WMATA API. Use the tools to toggle vehicles, search for stations and routes, and toggle entrances and bus stops.</span>
+      <span slot="title">DC Transit Map</span>
+      <span slot="message">Real-time train and bus positions via WMATA's API. Use the tools to toggle vehicles, search for stations and routes, and toggle entrances and bus stops.</span>
     </calcite-notice>
     <div class="panel-holder">
       <div class="sheet-handle"></div>
@@ -199,7 +199,7 @@
                 </calcite-label>
                 <calcite-button id="gotoStation" appearance="transparent" icon-start="pin" scale="s" kind="neutral">Station</calcite-button>
               </div>
-              <calcite-list id="arrivalsList" selection-mode="single"></calcite-list>
+              <div id="arrivalsContainer"></div>
             </div>
           </calcite-tab>
           <calcite-tab>
@@ -317,6 +317,8 @@
             silver: [162, 164, 161, 255],
             yellow: [255, 209, 0, 255],
           };
+
+          const LINE_NAMES = { RD: "Red", BL: "Blue", GR: "Green", OR: "Orange", SV: "Silver", YL: "Yellow" };
 
           const LINE_SPACING = 3; // points between adjacent line centers
 
@@ -798,6 +800,16 @@
             el.textContent = n > 0 ? `(${n})` : "";
           };
 
+          const updateBusCount = async () => {
+            const routeId = busRouteSearchEl.value;
+            if (routeId) {
+              const count = await busesLayer.queryFeatureCount({ where: `RouteID = '${routeId}'` });
+              busCountEl.textContent = count > 0 ? `(${count})` : "";
+            } else {
+              updateCount(busCountEl, busOids);
+            }
+          };
+
           // --- Train connection ---
           const connectTrains = () => {
             if (trainWs) return;
@@ -911,7 +923,7 @@
               trainWs.close();
               trainWs = null;
             }
-            clearFeatureLayer(trains);
+            clearFeatureLayer(trainsLayer);
 
             trainOids = {};
             trainNextOid = 1;
@@ -989,8 +1001,10 @@
                 if (!firstBusesWritePromise) {
                   firstBusesWritePromise = busPromise;
                 }
+                busPromise.then(() => updateBusCount());
+              } else {
+                updateBusCount();
               }
-              updateCount(busCountEl, busOids);
             };
 
             busWs.onclose = async (event) => {
@@ -1157,11 +1171,13 @@
             if (!routeId) {
               localStorage.removeItem("selectedBusRoute");
               busesLayer.definitionExpression = "1=1";
+              updateBusCount();
               return;
             }
             localStorage.setItem("selectedBusRoute", routeId);
             busRouteDetailsEl.style.display = "";
             busesLayer.definitionExpression = `RouteID = '${routeId}'`;
+            updateBusCount();
             zoomToFilteredBuses();
           });
 
@@ -1335,29 +1351,44 @@
 
           // --- Station click: entrances & arrivals ---
           const stationDetails = document.getElementById("stationDetails");
-          const arrivalsList = document.getElementById("arrivalsList");
+          const arrivalsContainer = document.getElementById("arrivalsContainer");
 
           let selectedTrain;
-          arrivalsList.addEventListener("calciteListChange", async () => {
-            const selected = arrivalsList.selectedItems;
+          let handlingSelection = false;
+
+          let arrivalsWs = null;
+          let activeHighlight = null;
+          let stationHighlight = null;
+
+          const handleArrivalSelection = async (list) => {
+            if (handlingSelection) return;
+            handlingSelection = true;
+            arrivalsContainer.querySelectorAll("calcite-list").forEach(otherList => {
+              if (otherList !== list) {
+                for (const item of [...otherList.selectedItems]) {
+                  item.selected = false;
+                }
+              }
+            });
+            handlingSelection = false;
+
+            const selected = list.selectedItems;
             if (selected.length === 0) {
               selectedTrain = null;
+              activeHighlight?.remove();
               return;
             }
             selectedTrain = selected[0].value;
             const arrival = selected[0]._arrival;
             if (!arrival?.TrainId) return;
 
-            if (activeHighlight) {
-              activeHighlight.remove();
-              activeHighlight = null;
-            }
+            activeHighlight?.remove();
 
             const result = await trainsLayer.queryFeatures({
               where: `TrainId = '${arrival.TrainId}'`,
               returnGeometry: true,
             });
-            
+
             if (result.features.length === 0) return;
 
             const target = result.features[0];
@@ -1365,36 +1396,55 @@
 
             const layerView = await view.whenLayerView(trainsLayer);
             activeHighlight = layerView.highlight(target);
-            setTimeout(() => {
-              if (activeHighlight) {
-                activeHighlight.remove();
-                activeHighlight = null;
+          };
+
+          const renderArrivals = (grouped) => {
+            arrivalsContainer.innerHTML = "";
+            const codes = Object.keys(grouped);
+            const isMultiCode = codes.length > 1;
+
+            for (const code of codes) {
+              const arrivals = grouped[code];
+
+              const station = stationsByCode[code];
+              const header = document.createElement("div");
+              header.style.cssText = "display:flex; align-items:center; gap:4px; padding:8px 12px 4px; font-size:13px; color:#aaa;";
+              const lineCodes = [station?.LineCode1, station?.LineCode2, station?.LineCode3, station?.LineCode4].filter(Boolean);
+              for (const lc of lineCodes) {
+                const dot = document.createElement("span");
+                dot.className = "arrival-line";
+                dot.style.background = LINE_COLORS[lc] || "#888";
+                header.appendChild(dot);
               }
-            }, 2000);
-          });
+              const label = document.createElement("span");
+              label.textContent = lineCodes.map(lc => LINE_NAMES[lc] || lc).join(" \u00b7 ");
+              header.appendChild(label);
+              arrivalsContainer.appendChild(header);
 
-          let arrivalsWs = null;
-          let activeHighlight = null;
-          let stationHighlight = null;
+              const list = document.createElement("calcite-list");
+              list.setAttribute("selection-mode", "single");
 
-          const renderArrivals = (arrivals) => {
-            arrivalsList.innerHTML = "";
-            for (const a of arrivals) {
-              const color = LINE_COLORS[a.Line] || "#888";
-              const item = document.createElement("calcite-list-item");
-              item.label = `${a.Destination || "Unknown"}`;
-              const minuteDescription = a.Min === "" || a.Min === "—" || a.Min === "ARR" || a.Min === "BRD" ? a.Min : `${a.Min} min`;
-              item.description = `${a.Car || "?"} cars · ${minuteDescription}`;
-              item.innerHTML = `<span slot="content-start" class="arrival-line" style="background:${color}"></span>`;
-              item._arrival = a;
-              item.value =  a.TrainId;
-              arrivalsList.appendChild(item);
-              item.selected = selectedTrain && selectedTrain === a.TrainId;
-            }
-            if (arrivals.length === 0) {
-              const item = document.createElement("calcite-list-item");
-              item.label = "No upcoming arrivals";
-              arrivalsList.appendChild(item);
+              for (const a of arrivals) {
+                const color = LINE_COLORS[a.Line] || "#888";
+                const item = document.createElement("calcite-list-item");
+                item.label = `${a.Destination || "Unknown"}`;
+                const minuteDescription = a.Min === "" || a.Min === "—" || a.Min === "ARR" || a.Min === "BRD" ? a.Min : `${a.Min} min`;
+                item.description = `${a.Car || "?"} cars · ${minuteDescription}`;
+                item.innerHTML = `<span slot="content-start" class="arrival-line" style="background:${color}"></span>`;
+                item._arrival = a;
+                item.value = a.TrainId;
+                list.appendChild(item);
+                item.selected = selectedTrain && selectedTrain === a.TrainId;
+              }
+
+              if (arrivals.length === 0) {
+                const item = document.createElement("calcite-list-item");
+                item.label = "No upcoming arrivals";
+                list.appendChild(item);
+              }
+
+              list.addEventListener("calciteListChange", () => handleArrivalSelection(list));
+              arrivalsContainer.appendChild(list);
             }
           };
 
@@ -1413,7 +1463,7 @@
             }
             // Hide station details
             stationDetails.style.display = "none";
-            arrivalsList.innerHTML = "";
+            arrivalsContainer.innerHTML = "";
             selectedStationCode = null;
             selectedTrain = null;
 
@@ -1426,7 +1476,7 @@
           const showArrivals = (code) => {
             selectedStationCode = code;
             stationDetails.style.display = "";
-            arrivalsList.innerHTML = "";
+            arrivalsContainer.innerHTML = "";
             sheetExpandIfNeeded();
 
             arrivalsWs = new WebSocket(

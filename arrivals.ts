@@ -204,17 +204,21 @@ async function poll(): Promise<void> {
       list.push({ ...a, DestinationCode: resolveDestinationCode(a) ?? "", TrainId: null });
     }
 
-    // Send merged results to each station's clients
+    // Send grouped results to each station's clients
     for (const [code, clients] of stationClients) {
-      // Collect arrivals from all equivalent codes
-      const stationArrivals: ArrivalWithTrain[] = [];
-      for (const eq of getEquivalentCodes(code)) {
-        const eqArrivals = byStation.get(eq);
-        if (eqArrivals) stationArrivals.push(...eqArrivals);
+      const equivalentCodes = getEquivalentCodes(code);
+      const grouped: Record<string, ArrivalWithTrain[]> = {};
+      const allArrivals: ArrivalWithTrain[] = [];
+      for (const eq of equivalentCodes) {
+        const eqArrivals = byStation.get(eq) ?? [];
+        grouped[eq] = eqArrivals;
+        allArrivals.push(...eqArrivals);
       }
-      stationArrivals.sort(arrivalSortCompare);
-      matchTrainIds(stationArrivals, code);
-      const message = JSON.stringify(stationArrivals);
+      for (const arr of Object.values(grouped)) {
+        arr.sort(arrivalSortCompare);
+      }
+      matchTrainIds(allArrivals, code);
+      const message = JSON.stringify(grouped);
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
           client.send(message);
@@ -272,20 +276,32 @@ export function handleArrivalsSocket(
     }
     addClient(stationCode, socket);
 
-    // Send initial arrivals immediately with train IDs
+    // Send initial arrivals immediately with train IDs, grouped by station code
     try {
       await ensureStationData();
       const allCodes = [...getEquivalentCodes(stationCode)];
       const rawArrivals = await getTrainArrivals(allCodes.join(","));
-      const arrivals: ArrivalWithTrain[] = rawArrivals.map((a) => ({
-        ...a,
-        DestinationCode: resolveDestinationCode(a) ?? "",
-        TrainId: null,
-      }));
-      arrivals.sort(arrivalSortCompare);
-      matchTrainIds(arrivals, stationCode);
+      const grouped: Record<string, ArrivalWithTrain[]> = {};
+      const allArrivals: ArrivalWithTrain[] = [];
+      for (const eq of allCodes) {
+        grouped[eq] = [];
+      }
+      for (const a of rawArrivals) {
+        const arrival: ArrivalWithTrain = {
+          ...a,
+          DestinationCode: resolveDestinationCode(a) ?? "",
+          TrainId: null,
+        };
+        if (!grouped[a.LocationCode]) grouped[a.LocationCode] = [];
+        grouped[a.LocationCode].push(arrival);
+        allArrivals.push(arrival);
+      }
+      for (const arr of Object.values(grouped)) {
+        arr.sort(arrivalSortCompare);
+      }
+      matchTrainIds(allArrivals, stationCode);
       if (socket.readyState === WebSocket.OPEN) {
-        socket.send(JSON.stringify(arrivals));
+        socket.send(JSON.stringify(grouped));
       }
     } catch (err) {
       console.error("Error fetching initial arrivals:", err);

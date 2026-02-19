@@ -1,6 +1,5 @@
 .api-key
 deno.d.ts
-CLAUDE.md
 /scripts/deploy.sh
 .claude/
 .claude-cache/

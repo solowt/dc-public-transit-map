@@ -1,3 +1,2 @@
 -  separate arrivals by track (Metro Center, Chinatown, L'efant)
--  perma-highlight trains when selected in arrivals list until they are deselected or arrivals/station is closed
--  update favicon?
+-  Update bus count based on current route selection
