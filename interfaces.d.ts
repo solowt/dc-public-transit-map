@@ -62,6 +62,40 @@ export interface BusStop {
   Routes: string[];
 }
 
+export interface BusIncident {
+  IncidentID: string;
+  DateUpdated: string;
+  IncidentType: string;
+  Description: string;
+  RoutesAffected: string[];
+}
+
+export interface ElevatorIncident {
+  UnitName: string;
+  UnitType: string;
+  StationCode: string;
+  StationName: string;
+  LocationDescription: string;
+  DateOutOfServ: string;
+  DateUpdated: string;
+  SymptomDescription: string;
+  EstimatedReturnToService: string | null;
+}
+
+export interface RailIncident {
+  IncidentID: string;
+  DateUpdated: string;
+  IncidentType: string;
+  Description: string;
+  LinesAffected: string;
+}
+
+export interface IncidentsSnapshot {
+  busIncidents: BusIncident[];
+  elevatorIncidents: ElevatorIncident[];
+  railIncidents: RailIncident[];
+}
+
 export interface Station {
   Code: string;
   Name: string;

@@ -1,7 +1,10 @@
 import type {
+  BusIncident,
   BusPosition,
   BusRoute,
   BusStop,
+  ElevatorIncident,
+  RailIncident,
   StandardRoute,
   Station,
   TrainPosition,
@@ -204,6 +207,27 @@ export async function getTrainArrivals(
   // Replace mangled desination with something more informative
   // To handle other manged cases (see todos)
   return data.Trains.map(t => t.Destination === "ssenger" ? { ...t, Destination: "No Passenger" } : t);
+}
+
+export async function getBusIncidents(): Promise<BusIncident[]> {
+  const data = await fetchWmata<{ BusIncidents: BusIncident[] }>(
+    `${BASE_URL}/Incidents.svc/json/BusIncidents`,
+  );
+  return data.BusIncidents;
+}
+
+export async function getElevatorIncidents(): Promise<ElevatorIncident[]> {
+  const data = await fetchWmata<{ ElevatorIncidents: ElevatorIncident[] }>(
+    `${BASE_URL}/Incidents.svc/json/ElevatorIncidents`,
+  );
+  return data.ElevatorIncidents;
+}
+
+export async function getRailIncidents(): Promise<RailIncident[]> {
+  const data = await fetchWmata<{ Incidents: RailIncident[] }>(
+    `${BASE_URL}/Incidents.svc/json/Incidents`,
+  );
+  return data.Incidents;
 }
 
 export async function getRouteShape(

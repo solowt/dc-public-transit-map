@@ -38,7 +38,7 @@
           justify-content: flex-start;
           align-items: stretch;
         }
-        div#arrivalsContainer {
+        div#arrivalsContainer, div#incidentsContainer {
           max-height: none;
         }
         .panel-holder {
@@ -162,6 +162,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      #incidentsContainer {
+        height: calc(100vh - 145px);
+        overflow-y: auto;
+      }
       #arrivalsContainer {
         max-height: calc(100vh - 270px);
         overflow-y: auto;
@@ -187,6 +191,7 @@
           <calcite-tab-nav slot="title-group">
             <calcite-tab-title selected>Trains</calcite-tab-title>
             <calcite-tab-title class="bus-tab-title">Buses</calcite-tab-title>
+            <calcite-tab-title class="incidents-tab-title">Incidents</calcite-tab-title>
           </calcite-tab-nav>
           <calcite-tab selected>
             <div class="layer-tab-content">
@@ -229,6 +234,21 @@
                 </calcite-label>
                 <calcite-button id="gotoBusRoute" appearance="transparent" icon-start="pin" scale="s" kind="neutral">Buses</calcite-button>
               </div>
+            </div>
+          </calcite-tab>
+          <calcite-tab>
+            <div id="incidentsContainer" style="padding: 0 1rem 1rem;">
+              <calcite-accordion scale="m">
+                <calcite-accordion-item heading="Rail Incidents" icon-start="exclamation-mark-triangle" id="railAccordion">
+                  <calcite-list id="railIncidentsList" selection-mode="none"></calcite-list>
+                </calcite-accordion-item>
+                <calcite-accordion-item heading="Bus Incidents" icon-start="bus" id="busAccordion">
+                  <calcite-list id="busIncidentsList" selection-mode="none"></calcite-list>
+                </calcite-accordion-item>
+                <calcite-accordion-item heading="Elevator/Escalator Outages" icon-start="escalator" id="elevatorAccordion">
+                  <calcite-list id="elevatorIncidentsList" selection-mode="none"></calcite-list>
+                </calcite-accordion-item>
+              </calcite-accordion>
             </div>
           </calcite-tab>
         </calcite-tabs>
@@ -1388,7 +1408,6 @@
             }
             selectedTrain = selected[0].value;
             const arrival = selected[0]._arrival;
-            console.log(arrival)
             if (!arrival?.TrainId) return;
 
             activeHighlight?.remove();
@@ -1693,6 +1712,122 @@
             }
           }
 
+          // --- Incidents WebSocket ---
+          let incidentsWs = null;
+          let incidentsReconnectTimer = null;
+          let incidentsReconnectDelay = 1000;
+          let incidentsTabActive = false;
+
+          const railIncidentsList = document.getElementById("railIncidentsList");
+          const busIncidentsList = document.getElementById("busIncidentsList");
+          const elevatorIncidentsList = document.getElementById("elevatorIncidentsList");
+
+          const renderIncidents = (data) => {
+            // Rail incidents
+            railIncidentsList.innerHTML = "";
+            if (data.railIncidents.length === 0) {
+              const item = document.createElement("calcite-list-item");
+              item.label = "No rail incidents";
+              railIncidentsList.appendChild(item);
+            } else {
+              for (const inc of data.railIncidents) {
+                const item = document.createElement("calcite-list-item");
+                item.label = `${inc.IncidentType} · Lines: ${inc.LinesAffected.replace(/;/g, ",").replace(/,\s*$/, "") || "N/A"}`;
+                item.description = inc.Description;
+                railIncidentsList.appendChild(item);
+              }
+            }
+
+            // Bus incidents
+            busIncidentsList.innerHTML = "";
+            if (data.busIncidents.length === 0) {
+              const item = document.createElement("calcite-list-item");
+              item.label = "No bus incidents";
+              busIncidentsList.appendChild(item);
+            } else {
+              for (const inc of data.busIncidents) {
+                const item = document.createElement("calcite-list-item");
+                item.label = `${inc.IncidentType} · Routes: ${inc.RoutesAffected.join(", ") || "N/A"}`;
+                item.description = inc.Description;
+                busIncidentsList.appendChild(item);
+              }
+            }
+
+            // Elevator/escalator outages
+            elevatorIncidentsList.innerHTML = "";
+            if (data.elevatorIncidents.length === 0) {
+              const item = document.createElement("calcite-list-item");
+              item.label = "No outages";
+              elevatorIncidentsList.appendChild(item);
+            } else {
+              for (const inc of data.elevatorIncidents) {
+                const item = document.createElement("calcite-list-item");
+                item.label = `${inc.UnitType} ${inc.UnitName} — ${inc.StationName}`;
+                item.description = `${inc.SymptomDescription}${inc.LocationDescription ? " · " + inc.LocationDescription : ""}`;
+                elevatorIncidentsList.appendChild(item);
+              }
+            }
+          };
+
+          const connectIncidents = () => {
+            if (incidentsWs) return;
+            incidentsWs = new WebSocket(
+              `${wsProtocol}//${location.host}/ws/incidents?token=${encodeURIComponent(accessToken)}`,
+            );
+
+            incidentsWs.onmessage = (event) => {
+              const data = JSON.parse(event.data);
+              renderIncidents(data);
+            };
+
+            incidentsWs.onclose = async (event) => {
+              incidentsWs = null;
+              if (event.code === 4001) {
+                await refreshToken();
+                incidentsReconnectDelay = 1000;
+                if (incidentsTabActive) connectIncidents();
+                return;
+              }
+              if (incidentsTabActive) {
+                incidentsReconnectTimer = setTimeout(() => {
+                  incidentsReconnectTimer = null;
+                  connectIncidents();
+                }, incidentsReconnectDelay);
+                incidentsReconnectDelay = Math.min(incidentsReconnectDelay * 2, MAX_RECONNECT_DELAY);
+              }
+            };
+
+            incidentsWs.onerror = () => {
+              console.error("Incidents WebSocket error");
+            };
+          };
+
+          const disconnectIncidents = () => {
+            if (incidentsReconnectTimer) {
+              clearTimeout(incidentsReconnectTimer);
+              incidentsReconnectTimer = null;
+            }
+            incidentsReconnectDelay = 1000;
+            if (incidentsWs) {
+              incidentsWs.onclose = null;
+              incidentsWs.close();
+              incidentsWs = null;
+            }
+          };
+
+          // Listen for tab changes to connect/disconnect incidents
+          const tabNav = document.querySelector("calcite-tab-nav");
+          tabNav.addEventListener("calciteTabChange", (e) => {
+            const wasActive = incidentsTabActive;
+            const wasSwitchedTo = e.target?.selectedTitle?.classList.contains("incidents-tab-title");
+            incidentsTabActive = wasSwitchedTo;
+            if (wasSwitchedTo && !wasActive) {
+              connectIncidents();
+            } else if (!wasSwitchedTo && wasActive) {
+              disconnectIncidents();
+            }
+          });
+
           // --- Visibility change: close sockets when hidden, reopen when visible ---
           let hiddenByVisibility = false;
 
@@ -1723,12 +1858,18 @@
                 arrivalsWs.close();
                 arrivalsWs = null;
               }
+              if (incidentsWs) {
+                incidentsWs.onclose = null;
+                incidentsWs.close();
+                incidentsWs = null;
+              }
             } else if (hiddenByVisibility) {
               hiddenByVisibility = false;
               // Reconnect based on current state
               if (trainsCheckEl.checked) connectTrains();
               if (busesCheckEl.checked) connectBuses();
               if (selectedStationCode) showArrivals(selectedStationCode);
+              if (incidentsTabActive) connectIncidents();
             }
           });
 

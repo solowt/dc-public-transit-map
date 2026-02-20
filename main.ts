@@ -14,6 +14,7 @@ import {
   startPolling as startBusPolling,
   stopPolling as stopBusPolling,
 } from "./buses.ts";
+import { handleIncidentsSocket } from "./incidents.ts";
 import { createTokens, refreshAccessToken, verifyAccessToken } from "./auth.ts";
 
 const circuitMap = await loadCircuitMap();
@@ -186,6 +187,9 @@ Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
     }
     if (pathname === "/ws/buses") {
       return handleWebSocket(req, "buses", busClients, getBusSnapshot, startBusPolling, stopBusPolling, auth.payload.exp);
+    }
+    if (pathname === "/ws/incidents") {
+      return handleIncidentsSocket(req, auth.payload.exp);
     }
     const arrivalsMatch = pathname.match(/^\/ws\/arrivals\/([A-Za-z0-9]+)$/);
     if (arrivalsMatch) {
