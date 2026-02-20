@@ -38,6 +38,9 @@
           justify-content: flex-start;
           align-items: stretch;
         }
+        div#arrivalsContainer {
+          max-height: none;
+        }
         .panel-holder {
           overscroll-behavior: contain;
           max-height: var(--sheet-full);
@@ -138,6 +141,7 @@
         display: none;
         position: fixed;
         bottom: 50%;
+        max-width: 500px;
         left: 15px;
         right: 15px;
         z-index: 2;
@@ -158,6 +162,10 @@
         overflow: hidden;
         text-overflow: ellipsis;
       }
+      #arrivalsContainer {
+        max-height: calc(100vh - 270px);
+        overflow-y: auto;
+      }
     </style>
   </head>
   <body class="calcite-mode-dark">
@@ -170,7 +178,7 @@
     </arcgis-map>
     <calcite-notice id="aboutNotice" closable icon="map" scale="l" width="auto">
       <span slot="title">DC Transit Map</span>
-      <span slot="message">Real-time train and bus positions via WMATA's API. Use the tools to toggle vehicles, search for stations and routes, and toggle entrances and bus stops.</span>
+      <span slot="message">Real-time train and bus positions via WMATA's API. Use the tools to toggle vehicles, search for stations and routes, and toggle entrances and bus stops. Responsive to large and small screens.</span>
     </calcite-notice>
     <div class="panel-holder">
       <div class="sheet-handle"></div>
@@ -1380,6 +1388,7 @@
             }
             selectedTrain = selected[0].value;
             const arrival = selected[0]._arrival;
+            console.log(arrival)
             if (!arrival?.TrainId) return;
 
             activeHighlight?.remove();
@@ -1473,11 +1482,15 @@
             }
           };
 
-          const showArrivals = (code) => {
+          const showArrivals = (code, sourceIsUser = false) => {
             selectedStationCode = code;
             stationDetails.style.display = "";
             arrivalsContainer.innerHTML = "";
-            sheetExpandIfNeeded();
+
+            // if the user initiated this action, expand the bottom sheet
+            if (sourceIsUser) {
+              sheetExpandIfNeeded();
+            }
 
             arrivalsWs = new WebSocket(
               `${wsProtocol}//${location.host}/ws/arrivals/${encodeURIComponent(code)}?token=${encodeURIComponent(accessToken)}`
@@ -1525,7 +1538,7 @@
               stationHighlight = layerView.highlight(feature);
             });
 
-            showArrivals(code);
+            showArrivals(code, true);
           });
 
           // Entrances toggle
@@ -1619,12 +1632,7 @@
             map.add(trainsLayer);
 
             view.popup.visible = false;
-            view.popup.collapsed = true;
-            view.popup.dockEnabled = true;
-            view.popup.dockOptions = {
-              position: "bottom-right",
-              breakpoint: false,
-            };
+
             view.constraints = {
               minZoom: 8,
               geometry: {

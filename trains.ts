@@ -89,11 +89,17 @@ function enrichTrain(train: TrainPosition): TrainData | null {
   return { ...train, location: point, heading };
 }
 
+const MAX_BACKPRESSURE = 65_536;
+
 function broadcast(updates: TrainData[], removals: string[] = []) {
   const message = JSON.stringify({ updates, removals });
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      if (client.bufferedAmount > MAX_BACKPRESSURE) {
+        client.close(4002, "Slow consumer");
+      } else {
+        client.send(message);
+      }
     }
   }
 }

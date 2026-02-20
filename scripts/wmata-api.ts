@@ -201,7 +201,9 @@ export async function getTrainArrivals(
   const data = await fetchWmata<{ Trains: ArrivalPrediction[] }>(
     `${BASE_URL}/StationPrediction.svc/json/GetPrediction/${encodeURIComponent(code)}`,
   );
-  return data.Trains;
+  // Replace mangled desination with something more informative
+  // To handle other manged cases (see todos)
+  return data.Trains.map(t => t.Destination === "ssenger" ? { ...t, Destination: "No Passenger" } : t);
 }
 
 export async function getRouteShape(

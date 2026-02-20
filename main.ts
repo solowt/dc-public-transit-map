@@ -29,6 +29,7 @@ initArrivals(getTrains);
 
 function handleWebSocket(
   req: Request,
+  label: string,
   clients: Set<WebSocket>,
   getSnapshot: () => { updates: unknown[]; removals: string[] },
   onStartPolling: () => void,
@@ -55,6 +56,7 @@ function handleWebSocket(
       }
     }
     clients.add(socket);
+    console.log(`[${label}] clients: ${clients.size}`);
     if (clients.size === 1) onStartPolling();
     const snapshot = getSnapshot();
     if (snapshot.updates.length > 0) {
@@ -71,6 +73,7 @@ function handleWebSocket(
     clearInterval(pingInterval);
     if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
     clients.delete(socket);
+    console.log(`[${label}] clients: ${clients.size}`);
     if (clients.size === 0) onStopPolling();
   };
 
@@ -179,10 +182,10 @@ Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
     }
 
     if (pathname === "/ws/trains") {
-      return handleWebSocket(req, trainClients, getTrainSnapshot, startTrainPolling, stopTrainPolling, auth.payload.exp);
+      return handleWebSocket(req, "trains", trainClients, getTrainSnapshot, startTrainPolling, stopTrainPolling, auth.payload.exp);
     }
     if (pathname === "/ws/buses") {
-      return handleWebSocket(req, busClients, getBusSnapshot, startBusPolling, stopBusPolling, auth.payload.exp);
+      return handleWebSocket(req, "buses", busClients, getBusSnapshot, startBusPolling, stopBusPolling, auth.payload.exp);
     }
     const arrivalsMatch = pathname.match(/^\/ws\/arrivals\/([A-Za-z0-9]+)$/);
     if (arrivalsMatch) {

@@ -14,11 +14,17 @@ export function init(wsClients: Set<WebSocket>): void {
   clients = wsClients;
 }
 
+const MAX_BACKPRESSURE = 65_536;
+
 function broadcast(updates: BusPosition[], removals: string[] = []) {
   const message = JSON.stringify({ updates, removals });
   for (const client of clients) {
     if (client.readyState === WebSocket.OPEN) {
-      client.send(message);
+      if (client.bufferedAmount > MAX_BACKPRESSURE) {
+        client.close(4002, "Slow consumer");
+      } else {
+        client.send(message);
+      }
     }
   }
 }

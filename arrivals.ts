@@ -68,6 +68,7 @@ function addClient(stationCode: string, socket: WebSocket): void {
     stationClients.set(stationCode, clients);
   }
   clients.add(socket);
+  console.log(`[arrivals] clients: ${totalClients()}`);
 }
 
 function removeClient(stationCode: string, socket: WebSocket): void {
@@ -77,6 +78,7 @@ function removeClient(stationCode: string, socket: WebSocket): void {
   if (clients.size === 0) {
     stationClients.delete(stationCode);
   }
+  console.log(`[arrivals] clients: ${totalClients()}`);
 }
 
 function totalClients(): number {
@@ -221,7 +223,11 @@ async function poll(): Promise<void> {
       const message = JSON.stringify(grouped);
       for (const client of clients) {
         if (client.readyState === WebSocket.OPEN) {
-          client.send(message);
+          if (client.bufferedAmount > 65_536) {
+            client.close(4002, "Slow consumer");
+          } else {
+            client.send(message);
+          }
         }
       }
     }
@@ -230,24 +236,19 @@ async function poll(): Promise<void> {
   }
 }
 
-let polling = false;
+let pollingActive = false;
 
 function startPolling(): void {
-  if (polling) return;
-  polling = true;
+  if (pollingActive) return;
+  pollingActive = true;
   (async () => {
-    while (polling) {
+    while (totalClients() > 0) {
       await poll();
-      if (!polling) break;
+      if (totalClients() === 0) break;
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
+    pollingActive = false;
   })();
-}
-
-function stopPollingIfEmpty(): void {
-  if (totalClients() === 0) {
-    polling = false;
-  }
 }
 
 /** Handle a new arrivals WebSocket connection for the given station code. */
@@ -313,7 +314,6 @@ export function handleArrivalsSocket(
   socket.onclose = () => {
     if (expiryTimeout !== undefined) clearTimeout(expiryTimeout);
     removeClient(stationCode, socket);
-    stopPollingIfEmpty();
   };
 
   return response;

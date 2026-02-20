@@ -1,6 +1,8 @@
 .api-key
 deno.d.ts
+instructions/*
 /scripts/deploy.sh
+/scripts/logs.sh
 .claude/
 .claude-cache/
 .claude-history/

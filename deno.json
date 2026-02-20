@@ -4,7 +4,8 @@
     "start": "APP_ENV=production deno run -A main.ts",
     "process-lines": "deno run --allow-read --allow-write scripts/process-lines.ts",
     "clear-cache": "rm -rf data/cache && echo 'Cache cleared'",
-    "deploy": "./scripts/deploy.sh"
+    "deploy": "./scripts/deploy.sh",
+    "logs": "./scripts/logs.sh"
   },
   "imports": {
     "@std/assert": "jsr:@std/assert@1",

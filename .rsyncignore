@@ -3,6 +3,7 @@
 .api-key
 CLAUDE.md
 todos.md
+instructions/
 
 .claude/
 .claude-cache/
