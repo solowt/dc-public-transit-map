@@ -15,9 +15,9 @@
     <style>
       :root {
         --sheet-peek: 34px;
-        --sheet-min: 200px;
+        --sheet-small: 200px;
         --sheet-mid: 50vh;
-        --sheet-max: 85vh;
+        --sheet-large: 85vh;
         --sheet-full: 100vh;
       }
       html, body, #viewDiv {
@@ -80,7 +80,7 @@
           position: fixed;
           top: 15px;
           right: 15px;
-          width: 300px;
+          width: 400px;
           z-index: 1;
         }
       }
@@ -492,6 +492,19 @@
                 },
               ],
             },
+            labelingInfo: [{
+              where: "1=0",
+              labelExpressionInfo: { expression: "$feature.DirectionText" },
+              symbol: {
+                type: "text",
+                color: "#FFFFFF",
+                haloColor: "#000000",
+                haloSize: 1,
+                font: { size: 8, weight: "bold" },
+              },
+              labelPlacement: "above-center",
+              minScale: 150000,
+            }],
             renderer: {
               type: "simple",
               symbol: {
@@ -756,7 +769,7 @@
               const savedStation = showTrains && localStorage.getItem("selectedStation");
               if (savedStation && stationsByCode[savedStation]) {
                 stationSearchEl.value = savedStation;
-                showArrivals(savedStation);
+                showArrivals(savedStation, true);
                 await viewReady;
                 const layerView = await view.whenLayerView(stationsLayer);
                 await applyEditsPromise;
@@ -1143,6 +1156,7 @@
                 busRouteSearchEl.value = savedRoute;
                 busRouteDetailsEl.style.display = "";
                 busesLayer.definitionExpression = `RouteID = '${savedRoute}'`;
+                busesLayer.labelingInfo[0].where = "1=1";
                 // only zoom to buses if trains are not shown
                 if (!showTrains) {
                   await viewReady;
@@ -1199,12 +1213,14 @@
             if (!routeId) {
               localStorage.removeItem("selectedBusRoute");
               busesLayer.definitionExpression = "1=1";
+              busesLayer.labelingInfo[0].where = "1=0";
               updateBusCount();
               return;
             }
             localStorage.setItem("selectedBusRoute", routeId);
             busRouteDetailsEl.style.display = "";
             busesLayer.definitionExpression = `RouteID = '${routeId}'`;
+            busesLayer.labelingInfo[0].where = "1=1";
             updateBusCount();
             zoomToFilteredBuses();
           });
@@ -1252,8 +1268,8 @@
           const sheetEl = document.querySelector(".panel-holder");
           const handleEl = document.querySelector(".sheet-handle");
           let sheetCleanup = null;
-          let currentSnap = "min";
-          const SNAP_ORDER = ["peek", "min", "mid", "max", "full"];
+          let currentSnap = "small";
+          const SNAP_ORDER = ["peek", "small", "mid", "large", "full"];
 
           function cssVarPx(name) {
             const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -1264,9 +1280,9 @@
           function sheetSnaps() {
             return {
               peek: cssVarPx("--sheet-peek"),
-              min: cssVarPx("--sheet-min"),
+              small: cssVarPx("--sheet-small"),
               mid: cssVarPx("--sheet-mid"),
-              max: cssVarPx("--sheet-max"),
+              large: cssVarPx("--sheet-large"),
               full: cssVarPx("--sheet-full"),
             };
           }
@@ -1362,7 +1378,7 @@
           /** Expand sheet to at least mid if currently below mid. */
           function sheetExpandIfNeeded() {
             if (!smallScreenQuery.matches) return;
-            if (currentSnap === "peek" || currentSnap === "min" || currentSnap === "mid") snapSheet("max");
+            if (currentSnap === "peek" || currentSnap === "small" || currentSnap === "mid") snapSheet("large");
           }
 
           const smallScreenQuery = window.matchMedia("(max-width: 768px)");
@@ -1427,7 +1443,6 @@
           };
 
           const renderArrivals = (grouped) => {
-            arrivalsContainer.innerHTML = "";
             const codes = Object.keys(grouped);
             const isMultiCode = codes.length > 1;
 
@@ -1472,7 +1487,7 @@
               }
 
               list.addEventListener("calciteListChange", () => handleArrivalSelection(list));
-              arrivalsContainer.appendChild(list);
+              arrivalsContainer.replaceChildren(list);
             }
           };
 
@@ -1724,47 +1739,44 @@
 
           const renderIncidents = (data) => {
             // Rail incidents
-            railIncidentsList.innerHTML = "";
             if (data.railIncidents.length === 0) {
               const item = document.createElement("calcite-list-item");
               item.label = "No rail incidents";
-              railIncidentsList.appendChild(item);
+              railIncidentsList.replaceChildren(item);
             } else {
               for (const inc of data.railIncidents) {
                 const item = document.createElement("calcite-list-item");
-                item.label = `${inc.IncidentType} · Lines: ${inc.LinesAffected.replace(/;/g, ",").replace(/,\s*$/, "") || "N/A"}`;
+                item.label = `${inc.IncidentType} · ${inc.LinesAffected.replace(/;/g, ",").replace(/,\s*$/, "") || "N/A"}`;
                 item.description = inc.Description;
-                railIncidentsList.appendChild(item);
+                railIncidentsList.replaceChildren(item);
               }
             }
 
             // Bus incidents
-            busIncidentsList.innerHTML = "";
             if (data.busIncidents.length === 0) {
               const item = document.createElement("calcite-list-item");
               item.label = "No bus incidents";
-              busIncidentsList.appendChild(item);
+              busIncidentsList.replaceChildren(item);
             } else {
               for (const inc of data.busIncidents) {
                 const item = document.createElement("calcite-list-item");
                 item.label = `${inc.IncidentType} · Routes: ${inc.RoutesAffected.join(", ") || "N/A"}`;
                 item.description = inc.Description;
-                busIncidentsList.appendChild(item);
+                busIncidentsList.replaceChildren(item);
               }
             }
 
             // Elevator/escalator outages
-            elevatorIncidentsList.innerHTML = "";
             if (data.elevatorIncidents.length === 0) {
               const item = document.createElement("calcite-list-item");
               item.label = "No outages";
-              elevatorIncidentsList.appendChild(item);
+              elevatorIncidentsList.replaceChildren(item);
             } else {
               for (const inc of data.elevatorIncidents) {
                 const item = document.createElement("calcite-list-item");
                 item.label = `${inc.UnitType} ${inc.UnitName} — ${inc.StationName}`;
                 item.description = `${inc.SymptomDescription}${inc.LocationDescription ? " · " + inc.LocationDescription : ""}`;
-                elevatorIncidentsList.appendChild(item);
+                elevatorIncidentsList.replaceChildren(item);
               }
             }
           };

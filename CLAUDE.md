@@ -43,6 +43,7 @@ dc-transit-map/
 ├── trains.ts                # Train polling, enrichment, circuit→coord lookup
 ├── buses.ts                 # Bus polling and broadcasting
 ├── arrivals.ts              # Arrival predictions + train matching
+├── incidents.ts             # Bus/rail/elevator incident polling + broadcasting
 ├── auth.ts                  # JWT access tokens + refresh token rotation
 ├── interfaces.d.ts          # Shared TypeScript type definitions
 ├── deno.json                # Tasks, imports, compiler options
@@ -79,10 +80,10 @@ dc-transit-map/
 
 ```
 WMATA APIs
-    ↓ (every 5s / 10s / 15s)
+    ↓ (every 5s / 10s / 15s / 30s)
 wmata-api.ts  (fetch wrappers + disk/memory caching)
     ↓
-trains.ts / buses.ts / arrivals.ts  (polling + change detection)
+trains.ts / buses.ts / arrivals.ts / incidents.ts  (polling + change detection)
     ↓
 WebSocket server (main.ts)
     ↓
@@ -109,6 +110,7 @@ Deno HTTP server on `127.0.0.1:8080`. Routes all requests by pathname.
 | `GET /ws/trains?token=...` | WebSocket | Query token | Live train positions |
 | `GET /ws/buses?token=...` | WebSocket | Query token | Live bus positions |
 | `GET /ws/arrivals/<code>?token=...` | WebSocket | Query token | Arrival predictions for a station |
+| `GET /ws/incidents?token=...` | WebSocket | Query token | Bus, rail, and elevator/escalator incidents |
 | `GET /api/stations` | HTTP | Bearer | All WMATA stations |
 | `GET /api/bus-routes` | HTTP | Bearer | All bus routes |
 | `GET /api/bus-stops?routeId=...` | HTTP | Bearer | Stops for a bus route |
@@ -129,6 +131,18 @@ All WebSocket channels (trains, buses) use the same envelope:
 On connect, clients receive the full current snapshot immediately. After that,
 only changes are sent. A ping is sent every 30 seconds. The connection closes
 with code `4001` if the access token expires.
+
+Incidents channel sends the full aggregated snapshot on every poll cycle:
+```json
+{
+  "busIncidents": [{ ...incident }],
+  "elevatorIncidents": [{ ...outage }],
+  "railIncidents": [{ ...incident }]
+}
+```
+Clients receive the current snapshot immediately on connect. The snapshot is
+re-sent on each 30-second poll cycle (no change detection — incidents are
+infrequent and the payload is small).
 
 Arrivals channel sends a JSON object keyed by station code, where each value
 is a sorted array of arrival objects for that code:
@@ -238,6 +252,24 @@ Polls WMATA `StationPrediction` every **10 seconds** per subscribed station.
 
 ---
 
+## Incidents (`incidents.ts`)
+
+Polls three WMATA Incidents API endpoints every **30 seconds** in parallel via
+`Promise.all`: bus incidents, elevator/escalator outages, and rail incidents.
+
+Aggregates results into a single `IncidentsSnapshot` object with three
+properties (`busIncidents`, `elevatorIncidents`, `railIncidents`) and broadcasts
+the full snapshot to all connected clients. Same lazy polling pattern as trains
+and buses — polling starts on first client connect, stops when all disconnect.
+Backpressure handling closes slow consumers at 64 KB buffered.
+
+The frontend connects to `/ws/incidents` only while the Incidents tab is active
+and disconnects when switching to another tab. Visibility change handling
+(close on hidden, reconnect on visible) follows the same pattern as other
+sockets.
+
+---
+
 ## WMATA API Integration (`scripts/wmata-api.ts`)
 
 ### Endpoints Used
@@ -253,6 +285,9 @@ Polls WMATA `StationPrediction` every **10 seconds** per subscribed station.
 | `Bus.svc/json/jRouteDetails` | None | On-demand | Bus route shapes |
 | `Rail.svc/json/jStationEntrances` | Memory | On-demand | Station entrances |
 | `StationPrediction.svc/json/GetPrediction` | None | 10s | Arrival predictions |
+| `Incidents.svc/json/BusIncidents` | None | 30s | Bus incidents/alerts |
+| `Incidents.svc/json/ElevatorIncidents` | None | 30s | Elevator/escalator outages |
+| `Incidents.svc/json/Incidents` | None | 30s | Rail incidents/alerts |
 
 ### Caching Strategy
 
@@ -319,6 +354,11 @@ BusStop          { StopID, Name, Lat, Lon, Routes: string[] }
 Station          { Code, Name, Lat, Lon, LineCode1-4: Line | null, StationTogether1-2, Address }
 TrackCircuit     { SeqNum, CircuitId, StationCode: string | null }
 StandardRoute    { LineCode: Line, TrackNum, TrackCircuits: TrackCircuit[] }
+BusIncident      { IncidentID, DateUpdated, IncidentType, Description, RoutesAffected: string[] }
+ElevatorIncident { UnitName, UnitType, StationCode, StationName, LocationDescription,
+                   DateOutOfServ, DateUpdated, SymptomDescription, EstimatedReturnToService }
+RailIncident     { IncidentID, DateUpdated, IncidentType, Description, LinesAffected: string }
+IncidentsSnapshot { busIncidents, elevatorIncidents, railIncidents }
 ```
 
 ---
@@ -330,7 +370,8 @@ and update marker positions in real-time.
 
 - **`index.html`** — ArcGIS JavaScript API v4.34 + Calcite Components v5.0.
   Dark theme. Responsive (mobile sheet / desktop panel). Layer toggles for
-  trains and buses.
+  trains and buses. Incidents tab with accordion-based display of rail, bus,
+  and elevator/escalator incidents.
 - **`editor.html`** — ArcGIS-based metro lines GeoJSON editor/viewer for
   inspecting processed line data.
 - **`maplibre/index.html`** — MapLibre GL v5. Lightweight alternative. Same dark
