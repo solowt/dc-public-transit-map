@@ -144,15 +144,17 @@ async function pollTrains() {
 }
 
 let polling = false;
+let pollGeneration = 0;
 
 /** Start the async poll loop. No-op if already running. */
 export function startPolling(): void {
   if (polling) return;
   polling = true;
+  const gen = ++pollGeneration;
   (async () => {
-    while (polling) {
+    while (polling && gen === pollGeneration) {
       await pollTrains();
-      if (!polling) break;
+      if (!polling || gen !== pollGeneration) break;
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   })();

@@ -44,14 +44,16 @@ async function pollIncidents() {
 }
 
 let polling = false;
+let pollGeneration = 0;
 
 function startPolling(): void {
   if (polling) return;
   polling = true;
+  const gen = ++pollGeneration;
   (async () => {
-    while (polling) {
+    while (polling && gen === pollGeneration) {
       await pollIncidents();
-      if (!polling) break;
+      if (!polling || gen !== pollGeneration) break;
       await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
     }
   })();

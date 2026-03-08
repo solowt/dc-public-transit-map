@@ -1,5 +1,5 @@
 import { loadCircuitMap } from "./scripts/generate-map.ts";
-import { getBusRoutes, getBusStops, getRouteShape, getStations, getEntrances } from "./scripts/wmata-api.ts";
+import { getBusRoutes, getBusStops, getRouteShape, getStations, getEntrances, getWmataUsage } from "./scripts/wmata-api.ts";
 import { handleArrivalsSocket, init as initArrivals } from "./arrivals.ts";
 import {
   getLatestSnapshot as getTrainSnapshot,
@@ -146,6 +146,12 @@ Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
 
   // Auth endpoints (no auth required)
   if (pathname === "/auth/token" && req.method === "POST") {
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+            ?? req.headers.get("x-real-ip")
+            ?? "unknown";
+    const ua = req.headers.get("user-agent") ?? "unknown";
+    const referer = req.headers.get("referer") ?? "none";
+    console.log(`[auth] new token ip=${ip} ua=${ua} referer=${referer}`);
     const { accessToken, refreshTokenCookie } = await createTokens();
     return new Response(JSON.stringify({ token: accessToken }), {
       headers: {
@@ -156,13 +162,20 @@ Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
   }
 
   if (pathname === "/auth/refresh" && req.method === "POST") {
+    const ip = req.headers.get("x-forwarded-for")?.split(",")[0]?.trim()
+            ?? req.headers.get("x-real-ip")
+            ?? "unknown";
+    const ua = req.headers.get("user-agent") ?? "unknown";
+    const referer = req.headers.get("referer") ?? "none";
     const result = await refreshAccessToken(req.headers.get("cookie"));
     if (!result) {
+      console.log(`[auth] refresh failed ip=${ip} ua=${ua} referer=${referer}`);
       return new Response(JSON.stringify({ error: "Invalid refresh token" }), {
         status: 401,
         headers: { "content-type": "application/json" },
       });
     }
+    console.log(`[auth] refresh ok ip=${ip} ua=${ua} referer=${referer}`);
     return new Response(JSON.stringify({ token: result.accessToken }), {
       headers: {
         "content-type": "application/json",
@@ -196,6 +209,13 @@ Deno.serve({ port: 8080, hostname: "127.0.0.1" }, async (req) => {
       return handleArrivalsSocket(req, arrivalsMatch[1], auth.payload.exp);
     }
     return new Response("Not Found", { status: 404 });
+  }
+
+  // API: WMATA request counter (no auth — lightweight diagnostic)
+  if (pathname === "/api/wmata-usage") {
+    return new Response(JSON.stringify(getWmataUsage()), {
+      headers: { "content-type": "application/json" },
+    });
   }
 
   // Auth gate for all /api/* routes

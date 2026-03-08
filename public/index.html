@@ -204,6 +204,7 @@
             </div>
             <calcite-combobox id="stationSearch" placeholder="Search stations" selection-mode="single">
             </calcite-combobox>
+            <calcite-loader id="trainLoader" label="Loading trains" style="display:none; padding: 2rem 0;"></calcite-loader>
             <div id="stationDetails" style="display:none;">
               <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 12px;">
                 <calcite-label layout="inline" style="margin:0;">
@@ -212,6 +213,7 @@
                 </calcite-label>
                 <calcite-button id="gotoStation" appearance="transparent" icon-start="pin" scale="s" kind="neutral">Station</calcite-button>
               </div>
+              <calcite-loader id="arrivalsLoader" label="Loading arrivals" style="display:none; padding: 2rem 0;"></calcite-loader>
               <div id="arrivalsContainer"></div>
             </div>
           </calcite-tab>
@@ -226,6 +228,7 @@
             </div>
             <calcite-combobox id="busRouteSearch" placeholder="Filter by route" selection-mode="single" style="display:none">
             </calcite-combobox>
+            <calcite-loader id="busLoader" label="Loading buses" style="display:none; padding: 2rem 0;"></calcite-loader>
             <div id="busRouteDetails" style="display:none;">
               <div style="display:flex; align-items:center; justify-content:space-between; padding: 8px 12px;">
                 <calcite-label layout="inline" style="margin:0;">
@@ -808,6 +811,9 @@
           const busesCheckEl = document.querySelector(".buses-check");
           const trainCountEl = document.getElementById("trainCount");
           const busCountEl = document.getElementById("busCount");
+          const trainLoaderEl = document.getElementById("trainLoader");
+          const busLoaderEl = document.getElementById("busLoader");
+          const arrivalsLoaderEl = document.getElementById("arrivalsLoader");
 
           function clearFeatureLayer(layer) {
             layer.queryFeatures().then(result => {
@@ -857,6 +863,7 @@
             linesLayer.visible = true;
             stationsLayer.visible = true;
             setStatus(trainStatusEl, "connecting");
+            trainLoaderEl.style.display = "";
             trainWs = new WebSocket(
               `${wsProtocol}//${location.host}/ws/trains?token=${encodeURIComponent(accessToken)}`,
             );
@@ -870,6 +877,7 @@
             };
 
             trainWs.onmessage = (event) => {
+              trainLoaderEl.style.display = "none";
               flashLoader(trainStatusEl);
               const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
@@ -951,6 +959,7 @@
           };
 
           const disconnectTrains = () => {
+            trainLoaderEl.style.display = "none";
             if (trainReconnectTimer) {
               clearTimeout(trainReconnectTimer);
               trainReconnectTimer = null;
@@ -976,6 +985,7 @@
           const connectBuses = () => {
             if (busWs) return;
             setStatus(busStatusEl, "connecting");
+            busLoaderEl.style.display = "";
             busWs = new WebSocket(
               `${wsProtocol}//${location.host}/ws/buses?token=${encodeURIComponent(accessToken)}`,
             );
@@ -989,6 +999,7 @@
             };
 
             busWs.onmessage = (event) => {
+              busLoaderEl.style.display = "none";
               flashLoader(busStatusEl);
               const { updates, removals } = JSON.parse(event.data);
               const addFeatures = [];
@@ -1072,6 +1083,7 @@
           };
 
           const disconnectBuses = () => {
+            busLoaderEl.style.display = "none";
             if (busReconnectTimer) {
               clearTimeout(busReconnectTimer);
               busReconnectTimer = null;
@@ -1122,6 +1134,7 @@
               busRouteSearchEl.style.display = "";
               connectBuses();
             } else {
+              busesLayer.labelingInfo[0].where = "1=0";
               busesLayer.visible = false;
               busRouteSearchEl.value = "";
               busRouteSearchEl.style.display = "none";
@@ -1494,6 +1507,7 @@
           const entrancesToggle = document.getElementById("entrancesToggle");
 
           const cleanupStationSelection = () => {
+            arrivalsLoaderEl.style.display = "none";
             // Clear entrances and reset toggle
             clearFeatureLayer(entrancesLayer);
             entrancesLayer.visible = false;
@@ -1520,6 +1534,7 @@
             selectedStationCode = code;
             stationDetails.style.display = "";
             arrivalsContainer.innerHTML = "";
+            arrivalsLoaderEl.style.display = "";
 
             // if the user initiated this action, expand the bottom sheet
             if (sourceIsUser) {
@@ -1530,6 +1545,7 @@
               `${wsProtocol}//${location.host}/ws/arrivals/${encodeURIComponent(code)}?token=${encodeURIComponent(accessToken)}`
             );
             arrivalsWs.onmessage = (event) => {
+              arrivalsLoaderEl.style.display = "none";
               flashLoader(trainStatusEl);
               if (selectedStationCode !== code) return;
               const arrivals = JSON.parse(event.data);
@@ -1540,6 +1556,8 @@
                 await refreshToken();
                 arrivalsWs = null;
                 showArrivals(code);
+              } else {
+                arrivalsLoaderEl.style.display = "none";
               }
             };
             arrivalsWs.onerror = () => {

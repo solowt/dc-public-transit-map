@@ -1,6 +1,6 @@
 .api-key
 deno.d.ts
-instructions/*
+instructions
 /scripts/deploy.sh
 /scripts/logs.sh
 .claude/

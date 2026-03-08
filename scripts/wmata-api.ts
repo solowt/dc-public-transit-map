@@ -18,7 +18,51 @@ const apiKey = env === "development"
   ? (await Deno.readTextFile(".api-key")).trim()
   : Deno.env.get("API_KEY") as string;
 
+console.log(apiKey);
+
 const CACHE_DIR = "data/cache";
+const BACKOFF_DURATION_MS = 60_000; // 60s cooldown on 403/429
+
+let rateLimitedUntil = 0;
+const serverStartedAt = new Intl.DateTimeFormat("en-US", {
+  timeZone: "America/New_York",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+}).format(new Date());
+
+// Rolling 24-hour request counter
+const requestTimestamps: number[] = [];
+const COUNTER_WINDOW_MS = 24 * 60 * 60 * 1000;
+const COUNTER_LOG_INTERVAL_MS = 5 * 60 * 1000; // log count every 5 min
+let lastCounterLog = 0;
+
+function recordRequest(): void {
+  const now = Date.now();
+  requestTimestamps.push(now);
+  // Prune old entries
+  const cutoff = now - COUNTER_WINDOW_MS;
+  while (requestTimestamps.length > 0 && requestTimestamps[0] < cutoff) {
+    requestTimestamps.shift();
+  }
+  // Periodic log
+  if (now - lastCounterLog >= COUNTER_LOG_INTERVAL_MS) {
+    lastCounterLog = now;
+    console.log(`[wmata] requests in last 24h: ${requestTimestamps.length}`);
+  }
+}
+
+/** Return the number of WMATA API requests made in the last 24 hours. */
+export function getWmataUsage(): { requests24h: number; serverStartedAt: string } {
+  const cutoff = Date.now() - COUNTER_WINDOW_MS;
+  while (requestTimestamps.length > 0 && requestTimestamps[0] < cutoff) {
+    requestTimestamps.shift();
+  }
+  return { requests24h: requestTimestamps.length, serverStartedAt };
+}
 
 async function readDiskCache<T>(filename: string): Promise<T | null> {
   try {
@@ -37,9 +81,22 @@ async function writeDiskCache(filename: string, data: unknown): Promise<void> {
 }
 
 async function fetchWmata<T>(url: string): Promise<T> {
+  const now = Date.now();
+  if (now < rateLimitedUntil) {
+    const secs = Math.ceil((rateLimitedUntil - now) / 1000);
+    throw new Error(`WMATA API rate-limited, backing off for ${secs}s`);
+  }
   const response = await fetch(url, {
     headers: { api_key: apiKey },
   });
+  recordRequest();
+  if (response.status === 403 || response.status === 429) {
+    rateLimitedUntil = Date.now() + BACKOFF_DURATION_MS;
+    console.error(`[wmata] ${response.status} — backing off for ${BACKOFF_DURATION_MS / 1000}s`);
+    throw new Error(
+      `WMATA API error: ${response.status} ${response.statusText}`,
+    );
+  }
   if (!response.ok) {
     throw new Error(
       `WMATA API error: ${response.status} ${response.statusText}`,
